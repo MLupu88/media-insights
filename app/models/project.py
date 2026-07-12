@@ -89,3 +89,10 @@ class Project(Base):
     classifications = relationship(
         "Classification", back_populates="project", cascade="all, delete-orphan"
     )
+    narrative_generations = relationship(
+        "NarrativeGeneration",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="NarrativeGeneration.created_at.desc()",
+        foreign_keys="NarrativeGeneration.project_id",
+    )

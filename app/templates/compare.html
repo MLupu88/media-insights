@@ -125,10 +125,23 @@
       {% set comparison = comparison_result.comparison %}
       {% set volatility = comparison_result.volatility %}
 
-      <div class="mt-10 flex items-center gap-4 text-sm text-ink/60">
-        <span class="border border-line px-3 py-1.5 font-medium text-ink">{{ baseline.label }}</span>
-        <span class="text-ink/30">vs</span>
-        <span class="border border-line px-3 py-1.5 font-medium text-ink">{{ comparison.label }}</span>
+      <div class="mt-10 flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center gap-4 text-sm text-ink/60">
+          <span class="border border-line px-3 py-1.5 font-medium text-ink">{{ baseline.label }}</span>
+          <span class="text-ink/30">vs</span>
+          <span class="border border-line px-3 py-1.5 font-medium text-ink">{{ comparison.label }}</span>
+        </div>
+        <form action="/compare/narratives/start" method="post">
+          {% for pid in baseline.project_ids %}
+            <input type="hidden" name="baseline_project_ids" value="{{ pid }}" />
+          {% endfor %}
+          {% for pid in comparison.project_ids %}
+            <input type="hidden" name="comparison_project_ids" value="{{ pid }}" />
+          {% endfor %}
+          <button type="submit" class="border border-ink px-5 py-2.5 text-sm font-medium text-ink transition hover:border-accent hover:text-accent">
+            Generate comparison insights
+          </button>
+        </form>
       </div>
 
       <div class="mt-8">

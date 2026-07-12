@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     n8n_classification_webhook_url: str = (
         "https://n8n.aiexperiments.eu/webhook/retail-media/classify"
     )
+    n8n_narrative_webhook_url: str = (
+        "https://n8n.aiexperiments.eu/webhook/retail-media/analyze"
+    )
     n8n_request_timeout_seconds: float = 15.0
 
     upload_root_dir: str = "data/uploads"

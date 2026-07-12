@@ -13,6 +13,7 @@ from app.security.auth import require_web_session
 from app.services.analytics import clamp_top_n, get_project_analytics, parse_analytics_filters
 from app.services.classification import get_project_summary
 from app.services.comparison import ComparisonServiceError, get_period_comparison
+from app.services.narrative_service import get_project_narrative_generations
 from app.services.projects import create_project, list_projects
 
 router = APIRouter(dependencies=[Depends(require_web_session)])
@@ -44,6 +45,7 @@ def render_project_detail(
     active_tab: str = "overview",
     upload_results: list[dict] | None = None,
     classification_message: dict | None = None,
+    narrative_message: dict | None = None,
     status_code: int = 200,
 ):
     uploaded_files = list(
@@ -57,6 +59,10 @@ def render_project_detail(
         top_n = clamp_top_n(request.query_params.get("top_n"))
         analytics_summary = get_project_analytics(db, project, filters, top_n=top_n)
 
+    narrative_generations = None
+    if active_tab == "insights":
+        narrative_generations = get_project_narrative_generations(db, project.id)
+
     return render(
         request,
         "project_detail.html",
@@ -68,6 +74,8 @@ def render_project_detail(
             "classification_summary": classification_summary,
             "classification_message": classification_message,
             "analytics_summary": analytics_summary,
+            "narrative_generations": narrative_generations,
+            "narrative_message": narrative_message,
         },
         status_code=status_code,
     )
@@ -135,7 +143,11 @@ def project_detail_page(
             },
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    active_tab = tab if tab in ("overview", "files", "classification", "analytics") else "overview"
+    active_tab = (
+        tab
+        if tab in ("overview", "files", "classification", "analytics", "insights")
+        else "overview"
+    )
     return render_project_detail(request, db, project, active_tab=active_tab)
 
 

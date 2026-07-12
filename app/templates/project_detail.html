@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "components/macros.html" import status_badge, empty_state %}
 {% from "components/analytics_macros.html" import stat_tile_grid, section_title, chart_panel %}
+{% from "components/insight_macros.html" import narrative_generation_row %}
 
 {% block title %}{{ project.name }} — MSL The Practice Media Insights{% endblock %}
 
@@ -44,6 +45,13 @@
       class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'analytics' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
     >
       Analytics
+    </a>
+    <a
+      href="/projects/{{ project.id }}?tab=insights"
+      data-tab-indicator="insights"
+      class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'insights' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
+    >
+      Insights
     </a>
   </nav>
 
@@ -512,6 +520,45 @@
           </div>
         {% else %}
           <p class="mt-4 text-sm text-ink/50">No story clusters in the current filter selection yet.</p>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div data-tab-panel="insights" class="{% if active_tab != 'insights' %}hidden{% endif %} mt-10">
+    {% if narrative_message %}
+      <div class="mb-6 border px-4 py-3 text-sm {% if narrative_message.type == 'error' %}border-accent/40 bg-accent/5 text-accent{% elif narrative_message.type == 'success' %}border-line bg-white text-ink{% else %}border-line bg-paper text-ink/70{% endif %}">
+        {{ narrative_message.text }}
+      </div>
+    {% endif %}
+
+    {% if classification_summary.valid_rows == 0 %}
+      {{ empty_state(
+        "No valid articles to generate insights from yet",
+        "Import a media-monitoring workbook with valid rows, then return here to generate narrative insights."
+      ) }}
+    {% else %}
+      {% set latest = narrative_generations[0] if narrative_generations else None %}
+      <form action="/projects/{{ project.id }}/narratives/start" method="post">
+        <button
+          type="submit"
+          class="bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+          {% if latest and latest.status in ("pending", "running") %}disabled{% endif %}
+        >
+          Generate insights
+        </button>
+      </form>
+
+      <div class="mt-8">
+        {{ section_title("Narrative generations", "Each generation is grounded strictly in the analytics snapshot captured when it was created — later data changes never retroactively affect it.") }}
+        {% if narrative_generations %}
+          <div class="space-y-3">
+            {% for generation in narrative_generations %}
+              {{ narrative_generation_row(generation) }}
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="text-sm text-ink/50">No narrative generations yet.</p>
         {% endif %}
       </div>
     {% endif %}

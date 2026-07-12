@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api import analytics, auth, classification, comparison, files, internal, pages
 from app.api import health as health_router
+from app.api import narrative_generations, narratives
 from app.config import get_settings
 from app.database import get_db
 from app.security.auth import NotAuthenticated
@@ -44,3 +45,5 @@ app.include_router(health_router.router)
 app.include_router(internal.router)
 app.include_router(analytics.router)
 app.include_router(comparison.router)
+app.include_router(narratives.router)
+app.include_router(narrative_generations.router)

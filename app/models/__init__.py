@@ -6,6 +6,12 @@ from app.models.classification import (
     ClassificationBatchStatus,
     ClassificationTaxonomy,
 )
+from app.models.narrative import (
+    NarrativeGeneration,
+    NarrativeGenerationStatus,
+    NarrativeInsight,
+    NarrativeValidationStatus,
+)
 from app.models.project import AnalysisStatus, Project, ProjectStatus
 from app.models.uploaded_file import UploadedFile, UploadedFileStatus
 
@@ -22,4 +28,8 @@ __all__ = [
     "ClassificationBatchArticle",
     "ClassificationBatchStatus",
     "ClassificationTaxonomy",
+    "NarrativeGeneration",
+    "NarrativeGenerationStatus",
+    "NarrativeInsight",
+    "NarrativeValidationStatus",
 ]

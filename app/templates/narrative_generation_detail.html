@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import status_badge, empty_state %}
+{% from "components/analytics_macros.html" import section_title %}
+{% from "components/insight_macros.html" import narrative_insight_card %}
+
+{% block title %}Narrative generation — MSL The Practice Media Insights{% endblock %}
+
+{% block content %}
+<div class="msl-container py-14">
+  {% if generation.baseline_project_ids %}
+    <a href="/compare" class="text-sm font-medium text-ink/50 transition hover:text-accent">← Back to comparison</a>
+  {% else %}
+    <a href="/projects/{{ generation.project_id }}?tab=insights" class="text-sm font-medium text-ink/50 transition hover:text-accent">← Back to project insights</a>
+  {% endif %}
+
+  <div class="mt-4 flex flex-col gap-4 border-b border-line pb-8 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h1 class="font-display text-4xl font-semibold text-ink">
+        {{ "Comparison" if generation.baseline_project_ids else "Project" }} narrative generation
+      </h1>
+      <p class="mt-2 text-sm text-ink/60">
+        Created {{ generation.created_at.strftime("%d %b %Y, %H:%M") }} ·
+        {{ generation.narrative_types | length }} type(s) requested
+        {% if generation.missing_narrative_types %}
+          · missing: {{ generation.missing_narrative_types | join(", ") }}
+        {% endif %}
+      </p>
+    </div>
+    {{ status_badge(generation.status) }}
+  </div>
+
+  {% if generation.error_message %}
+    <div class="mt-8 border border-accent/40 bg-accent/5 px-4 py-3 text-sm text-accent">
+      {{ generation.error_message }}
+    </div>
+  {% endif %}
+
+  <div class="mt-8">
+    {{ section_title("Insights", "Grounded strictly in the analytics snapshot captured when this generation was created.") }}
+
+    {% if valid_insights %}
+      <div class="space-y-6">
+        {% for insight in valid_insights %}
+          {{ narrative_insight_card(insight) }}
+        {% endfor %}
+      </div>
+    {% else %}
+      {{ empty_state(
+        "No insights yet",
+        "This generation has not produced any validated insights yet. Check back once it completes, or start a new generation if it failed."
+      ) }}
+    {% endif %}
+  </div>
+
+  <p class="mt-10 text-xs text-ink/40">
+    Model: {{ generation.model or "—" }} · Prompt version: {{ generation.prompt_version or "—" }} ·
+    Contract: {{ generation.prompt_contract_version }} / {{ generation.payload_schema_version }} / {{ generation.validator_version }}
+  </p>
+</div>
+{% endblock %}
