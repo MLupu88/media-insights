@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "components/macros.html" import status_badge, empty_state %}
+{% from "components/analytics_macros.html" import stat_tile_grid, section_title, chart_panel %}
 
 {% block title %}{{ project.name }} — MSL The Practice Media Insights{% endblock %}
 
@@ -37,6 +38,13 @@
     >
       Classification
     </button>
+    <a
+      href="/projects/{{ project.id }}?tab=analytics"
+      data-tab-indicator="analytics"
+      class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'analytics' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
+    >
+      Analytics
+    </a>
   </nav>
 
   <div data-tab-panel="overview" class="{% if active_tab != 'overview' %}hidden{% endif %} mt-10">
@@ -191,9 +199,330 @@
       </p>
     {% endif %}
   </div>
+
+  <div data-tab-panel="analytics" class="{% if active_tab != 'analytics' %}hidden{% endif %} mt-10">
+    {% if not project.total_rows %}
+      {{ empty_state(
+        "No files uploaded yet",
+        "Upload retailer media-monitoring workbooks in the Files section to see analytics here."
+      ) }}
+    {% elif analytics_summary and analytics_summary.kpis.unique_valid_articles == 0 %}
+      {{ empty_state(
+        "No valid articles to analyze yet",
+        "Import a media-monitoring workbook with valid rows in the Files section, then return here."
+      ) }}
+    {% elif analytics_summary %}
+      {% set kpis = analytics_summary.kpis %}
+      {% set brands = analytics_summary.brands %}
+      {% set topics = analytics_summary.topics %}
+      {% set sentiment = analytics_summary.sentiment %}
+      {% set pubs = analytics_summary.publications_and_stories %}
+
+      {% include "components/analytics_filters.html" %}
+
+      <div class="mt-8">
+        {{ section_title("Project KPIs", "Pipeline totals are always project-wide; the rest respect the active filters above.") }}
+        {{ stat_tile_grid([
+          ("Total imported rows", kpis.total_imported_rows),
+          ("Valid rows", kpis.valid_rows),
+          ("Invalid rows", kpis.invalid_rows),
+          ("Duplicate rows", kpis.duplicate_rows),
+          ("Duplicate share", kpis.duplicate_share_pct ~ "%"),
+        ], "sm:grid-cols-5") }}
+
+        <p class="mt-6 max-w-2xl text-xs text-ink/50">
+          The figures below are scoped to <strong class="text-ink/70">unique valid articles</strong>
+          (duplicates excluded) so coverage is never double-counted. This is intentionally
+          different from the Classification tab, which tracks operational classification
+          coverage across <em>all</em> valid imported articles, duplicates included.
+        </p>
+        <div class="mt-4">
+          {{ stat_tile_grid([
+            ("Unique valid articles", kpis.unique_valid_articles),
+            ("Unique classified articles", kpis.unique_classified_articles),
+            ("Unique unclassified articles", kpis.unique_unclassified_articles),
+            ("Total reach", kpis.total_reach | number),
+            ("Average reach", kpis.average_reach | number),
+            ("Median reach", kpis.median_reach | number),
+            ("Publications", kpis.publication_count),
+            ("Low-confidence classifications", kpis.low_confidence_count),
+          ], "sm:grid-cols-4") }}
+        </div>
+        {% if kpis.reach_missing_count %}
+          <p class="mt-3 text-xs text-ink/40">
+            Reach is missing for {{ kpis.reach_missing_count }} of {{ kpis.unique_valid_articles }}
+            unique valid articles; those are excluded from the reach figures above, not treated as zero.
+          </p>
+        {% endif %}
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Brand and competitor performance", "Share of Voice is volume-based; reach share is shown alongside it as a secondary stat.") }}
+
+        {% if brands.by_volume %}
+          <div class="msl-panel overflow-x-auto">
+            <table class="w-full min-w-[720px] text-left text-sm">
+              <thead>
+                <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                  <th class="px-4 py-3 font-medium">Brand</th>
+                  <th class="px-4 py-3 font-medium">Articles</th>
+                  <th class="px-4 py-3 font-medium">SOV</th>
+                  <th class="px-4 py-3 font-medium">Reach</th>
+                  <th class="px-4 py-3 font-medium">Reach share</th>
+                  <th class="px-4 py-3 font-medium">Avg reach</th>
+                  <th class="px-4 py-3 font-medium">Median reach</th>
+                  <th class="px-4 py-3 font-medium">Primary focus</th>
+                  <th class="px-4 py-3 font-medium">Mentioned only</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in brands.by_volume %}
+                  <tr class="border-b border-line last:border-b-0">
+                    <td class="px-4 py-3 font-medium text-ink">{{ row.brand }}</td>
+                    <td class="px-4 py-3">{{ row.article_count }}</td>
+                    <td class="px-4 py-3">{{ row.sov_pct }}%</td>
+                    <td class="px-4 py-3">{{ row.total_reach | number }}</td>
+                    <td class="px-4 py-3">{{ row.reach_share_pct }}%</td>
+                    <td class="px-4 py-3">{{ row.average_reach | number }}</td>
+                    <td class="px-4 py-3">{{ row.median_reach | number }}</td>
+                    <td class="px-4 py-3">{{ row.primary_focus_count }}</td>
+                    <td class="px-4 py-3">{{ row.mentioned_only_count }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {{ chart_panel(
+              "chart-brand-volume", "bar-horizontal", "Article volume by brand",
+              brands.by_volume | map(attribute="brand") | list,
+              brands.by_volume | map(attribute="article_count") | list
+            ) }}
+            {{ chart_panel(
+              "chart-brand-reach", "bar-horizontal", "Total reach by brand",
+              brands.by_reach | map(attribute="brand") | list,
+              brands.by_reach | map(attribute="total_reach") | list
+            ) }}
+          </div>
+        {% else %}
+          <p class="text-sm text-ink/50">No brand data in the current filter selection.</p>
+        {% endif %}
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Topic and category mix", "Topic breakdowns only exist for classified articles.") }}
+
+        {% if topics.classified_count %}
+          <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {{ chart_panel(
+              "chart-topic-volume", "bar-horizontal", "Primary topic distribution",
+              topics.primary_topic_distribution | map(attribute="value") | list,
+              topics.primary_topic_distribution | map(attribute="count") | list
+            ) }}
+            {{ chart_panel(
+              "chart-category-volume", "bar-horizontal", "Communication category distribution",
+              topics.communication_category_distribution | map(attribute="value") | list,
+              topics.communication_category_distribution | map(attribute="count") | list
+            ) }}
+          </div>
+
+          <p class="mt-4 text-xs text-ink/40">
+            Secondary topic is set on {{ topics.secondary_topic_distribution | map(attribute="count") | sum }}
+            of {{ topics.classified_count }} classified articles
+            ({{ topics.classified_without_secondary_topic_count }} have none).
+          </p>
+
+          {% if topics.topic_mix_by_brand %}
+            <div class="msl-panel mt-6 overflow-x-auto">
+              <table class="w-full min-w-[600px] text-left text-sm">
+                <thead>
+                  <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                    <th class="px-4 py-3 font-medium">Brand</th>
+                    <th class="px-4 py-3 font-medium">Topic mix</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in topics.topic_mix_by_brand %}
+                    <tr class="border-b border-line last:border-b-0">
+                      <td class="px-4 py-3 align-top font-medium text-ink">{{ row.brand }}</td>
+                      <td class="px-4 py-3">
+                        <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink/70">
+                          {% for entry in row.topics %}
+                            <span>{{ entry.topic }} — {{ entry.count }} ({{ entry.pct }}%)</span>
+                          {% endfor %}
+                        </div>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
+        {% else %}
+          <p class="text-sm text-ink/50">No classified articles in the current filter selection yet.</p>
+        {% endif %}
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Sentiment and Tone of Voice") }}
+
+        {% if sentiment.overall_distribution %}
+          <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {{ chart_panel(
+              "chart-sentiment-overall", "doughnut-sentiment", "Overall sentiment",
+              sentiment.overall_distribution | map(attribute="value") | list,
+              sentiment.overall_distribution | map(attribute="count") | list
+            ) }}
+            {{ chart_panel(
+              "chart-brand-role", "doughnut", "Brand-role split",
+              sentiment.brand_role_distribution | map(attribute="value") | list,
+              sentiment.brand_role_distribution | map(attribute="count") | list
+            ) }}
+          </div>
+
+          <p class="mt-4 text-xs text-ink/50">
+            Primary focus: {{ sentiment.primary_focus_vs_mentioned_only.primary_focus }}
+            ({{ sentiment.primary_focus_vs_mentioned_only.primary_focus_pct }}%) ·
+            Mentioned only: {{ sentiment.primary_focus_vs_mentioned_only.mentioned_only }}
+            ({{ sentiment.primary_focus_vs_mentioned_only.mentioned_only_pct }}%)
+          </p>
+
+          {% if sentiment.sentiment_by_brand %}
+            <div class="msl-panel mt-6 overflow-x-auto">
+              <table class="w-full min-w-[560px] text-left text-sm">
+                <thead>
+                  <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                    <th class="px-4 py-3 font-medium">Brand</th>
+                    <th class="px-4 py-3 font-medium">Total</th>
+                    <th class="px-4 py-3 font-medium">Positive</th>
+                    <th class="px-4 py-3 font-medium">Neutral</th>
+                    <th class="px-4 py-3 font-medium">Negative</th>
+                    <th class="px-4 py-3 font-medium">Mixed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in sentiment.sentiment_by_brand %}
+                    <tr class="border-b border-line last:border-b-0">
+                      <td class="px-4 py-3 font-medium text-ink">{{ row.brand }}</td>
+                      <td class="px-4 py-3">{{ row.total }}</td>
+                      <td class="px-4 py-3">{{ row.counts.positive }}</td>
+                      <td class="px-4 py-3">{{ row.counts.neutral }}</td>
+                      <td class="px-4 py-3">{{ row.counts.negative }}</td>
+                      <td class="px-4 py-3">{{ row.counts.mixed }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% endif %}
+
+          {% if sentiment.low_confidence_items %}
+            <div class="mt-6">
+              <p class="mb-2 text-xs font-medium uppercase tracking-wide text-ink/50">
+                Low-confidence classifications ({{ sentiment.low_confidence_total_count }} total, showing lowest {{ sentiment.low_confidence_items | length }})
+              </p>
+              <div class="msl-panel overflow-x-auto">
+                <table class="w-full min-w-[560px] text-left text-sm">
+                  <thead>
+                    <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                      <th class="px-4 py-3 font-medium">Title</th>
+                      <th class="px-4 py-3 font-medium">Brand</th>
+                      <th class="px-4 py-3 font-medium">Primary topic</th>
+                      <th class="px-4 py-3 font-medium">Confidence</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for item in sentiment.low_confidence_items %}
+                      <tr class="border-b border-accent/30 bg-accent/5 text-accent last:border-b-0">
+                        <td class="px-4 py-3">{{ item.title or "—" }}</td>
+                        <td class="px-4 py-3">{{ item.brand }}</td>
+                        <td class="px-4 py-3">{{ item.primary_topic }}</td>
+                        <td class="px-4 py-3">{{ item.confidence }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          {% endif %}
+        {% else %}
+          <p class="text-sm text-ink/50">No classified articles in the current filter selection yet.</p>
+        {% endif %}
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Publications", "Concentration = share of the filtered population held by the top 3 / top 5, by volume and by reach — kept as separate, never-mixed figures.") }}
+
+        {% if pubs.publications_by_volume %}
+          {{ stat_tile_grid([
+            ("Top 3 by volume", pubs.publication_concentration.top3_volume_pct ~ "%"),
+            ("Top 5 by volume", pubs.publication_concentration.top5_volume_pct ~ "%"),
+            ("Top 3 by reach", pubs.publication_concentration.top3_reach_pct ~ "%"),
+            ("Top 5 by reach", pubs.publication_concentration.top5_reach_pct ~ "%"),
+          ], "sm:grid-cols-4") }}
+
+          <div class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {{ chart_panel(
+              "chart-pub-volume", "bar-horizontal", "Top publications by volume",
+              pubs.publications_by_volume | map(attribute="publication") | list,
+              pubs.publications_by_volume | map(attribute="article_count") | list
+            ) }}
+            {{ chart_panel(
+              "chart-pub-reach", "bar-horizontal", "Top publications by reach",
+              pubs.publications_by_reach | map(attribute="publication") | list,
+              pubs.publications_by_reach | map(attribute="total_reach") | list
+            ) }}
+          </div>
+        {% else %}
+          <p class="text-sm text-ink/50">No publication data in the current filter selection.</p>
+        {% endif %}
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Stories", "Story clustering is classified-only — it does not represent coverage of all unique valid articles.") }}
+
+        {{ stat_tile_grid([
+          ("Classified with story_key", pubs.classified_with_story_key_count),
+          ("Classified without story_key", pubs.classified_without_story_key_count),
+          ("Unique story clusters", pubs.unique_story_cluster_count),
+        ], "sm:grid-cols-3") }}
+
+        {% if pubs.stories_by_volume %}
+          <div class="mt-6">
+            {{ stat_tile_grid([
+              ("Top 3 by volume", pubs.story_concentration.top3_volume_pct ~ "%"),
+              ("Top 5 by volume", pubs.story_concentration.top5_volume_pct ~ "%"),
+              ("Top 3 by reach", pubs.story_concentration.top3_reach_pct ~ "%"),
+              ("Top 5 by reach", pubs.story_concentration.top5_reach_pct ~ "%"),
+            ], "sm:grid-cols-4") }}
+          </div>
+
+          <div class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {{ chart_panel(
+              "chart-story-volume", "bar-horizontal", "Top stories by volume",
+              pubs.stories_by_volume | map(attribute="story_key") | list,
+              pubs.stories_by_volume | map(attribute="article_count") | list
+            ) }}
+            {{ chart_panel(
+              "chart-story-reach", "bar-horizontal", "Top stories by reach",
+              pubs.stories_by_reach | map(attribute="story_key") | list,
+              pubs.stories_by_reach | map(attribute="total_reach") | list
+            ) }}
+          </div>
+        {% else %}
+          <p class="mt-4 text-sm text-ink/50">No story clusters in the current filter selection yet.</p>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/js/app.js"></script>
+{% if active_tab == "analytics" %}
+  <script src="/static/js/vendor/chart.umd.js"></script>
+  <script src="/static/js/charts.js"></script>
+{% endif %}
 {% endblock %}

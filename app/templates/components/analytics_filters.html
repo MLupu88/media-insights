@@ -1,0 +1,73 @@
+{% set af = analytics_summary.filters %}
+{% set opts = analytics_summary.available_filter_options %}
+<form method="get" action="/projects/{{ project.id }}" class="msl-panel flex flex-wrap items-end gap-4 p-4">
+  <input type="hidden" name="tab" value="analytics" />
+
+  <div>
+    <label class="msl-label" for="filter-brand">Brand</label>
+    <select id="filter-brand" name="brand" class="msl-input">
+      <option value="">All brands</option>
+      {% for brand in opts.brands %}
+        <option value="{{ brand }}" {% if af.brand == brand %}selected{% endif %}>{{ brand }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="filter-publication">Publication</label>
+    <select id="filter-publication" name="publication" class="msl-input">
+      <option value="">All publications</option>
+      {% for pub in opts.publications %}
+        <option value="{{ pub }}" {% if af.publication == pub %}selected{% endif %}>{{ pub }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="filter-topic">Primary topic</label>
+    <select id="filter-topic" name="primary_topic" class="msl-input">
+      <option value="">All topics</option>
+      {% for topic in opts.primary_topics %}
+        <option value="{{ topic }}" {% if af.primary_topic == topic %}selected{% endif %}>{{ topic }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="filter-category">Category</label>
+    <select id="filter-category" name="communication_category" class="msl-input">
+      <option value="">All categories</option>
+      {% for category in opts.communication_categories %}
+        <option value="{{ category }}" {% if af.communication_category == category %}selected{% endif %}>{{ category }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="filter-sentiment">Sentiment</label>
+    <select id="filter-sentiment" name="sentiment" class="msl-input">
+      <option value="">All sentiments</option>
+      {% for sentiment in opts.sentiments %}
+        <option value="{{ sentiment }}" {% if af.sentiment == sentiment %}selected{% endif %}>{{ sentiment }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="filter-state">State</label>
+    <select id="filter-state" name="state" class="msl-input">
+      <option value="all" {% if af.state == "all" %}selected{% endif %}>All valid</option>
+      <option value="classified" {% if af.state == "classified" %}selected{% endif %}>Classified only</option>
+      <option value="unclassified" {% if af.state == "unclassified" %}selected{% endif %}>Unclassified only</option>
+    </select>
+  </div>
+
+  <div class="flex gap-2">
+    <button type="submit" class="bg-ink px-4 py-2 text-sm font-medium text-paper transition hover:bg-accent">
+      Apply filters
+    </button>
+    <a href="/projects/{{ project.id }}?tab=analytics" class="px-4 py-2 text-sm font-medium text-ink/60 transition hover:text-ink">
+      Reset
+    </a>
+  </div>
+</form>

@@ -10,11 +10,21 @@ from app.database import get_db
 from app.models.project import Project
 from app.schemas.project import ProjectCreate
 from app.security.auth import require_web_session
+from app.services.analytics import clamp_top_n, get_project_analytics, parse_analytics_filters
 from app.services.classification import get_project_summary
 from app.services.projects import create_project, list_projects
 
 router = APIRouter(dependencies=[Depends(require_web_session)])
 templates = Jinja2Templates(directory="app/templates")
+
+
+def _format_number(value) -> str:
+    if value is None:
+        return "—"
+    return f"{value:,.0f}"
+
+
+templates.env.filters["number"] = _format_number
 
 
 def render(request: Request, template_name: str, context: dict, status_code: int = 200):
@@ -39,6 +49,13 @@ def render_project_detail(
         sorted(project.uploaded_files, key=lambda f: f.created_at, reverse=True)
     )
     classification_summary = get_project_summary(db, project)
+
+    analytics_summary = None
+    if active_tab == "analytics":
+        filters = parse_analytics_filters(request.query_params)
+        top_n = clamp_top_n(request.query_params.get("top_n"))
+        analytics_summary = get_project_analytics(db, project, filters, top_n=top_n)
+
     return render(
         request,
         "project_detail.html",
@@ -49,6 +66,7 @@ def render_project_detail(
             "upload_results": upload_results or [],
             "classification_summary": classification_summary,
             "classification_message": classification_message,
+            "analytics_summary": analytics_summary,
         },
         status_code=status_code,
     )
@@ -116,5 +134,5 @@ def project_detail_page(
             },
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    active_tab = tab if tab in ("overview", "files", "classification") else "overview"
+    active_tab = tab if tab in ("overview", "files", "classification", "analytics") else "overview"
     return render_project_detail(request, db, project, active_tab=active_tab)

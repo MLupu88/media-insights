@@ -9,7 +9,7 @@ COPY tailwind.config.js ./
 COPY app/templates ./app/templates
 COPY app/static/css ./app/static/css
 COPY app/static/js ./app/static/js
-RUN npm run build:css
+RUN npm run build
 
 # --- Stage 2: application image ---
 FROM python:3.12-slim AS app
@@ -34,6 +34,7 @@ COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
 COPY --from=assets /assets/app/static/css/app.css ./app/static/css/app.css
+COPY --from=assets /assets/app/static/js/vendor ./app/static/js/vendor
 
 RUN mkdir -p /app/data/uploads
 VOLUME ["/app/data/uploads"]

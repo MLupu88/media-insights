@@ -1,0 +1,39 @@
+{# Analytics-specific components. Kept separate from components/macros.html
+   so the stable Overview/Files/Classification tabs are never touched by
+   Phase 4 work. #}
+
+{% macro stat_tile(label, value) -%}
+  <div class="bg-paper px-6 py-6">
+    <p class="text-xs font-medium uppercase tracking-wide text-ink/50">{{ label }}</p>
+    <p class="mt-2 font-display text-2xl font-semibold text-ink">{{ value }}</p>
+  </div>
+{%- endmacro %}
+
+{% macro stat_tile_grid(items, extra_classes="sm:grid-cols-3") -%}
+  <div class="grid grid-cols-2 gap-px overflow-hidden border border-line bg-line {{ extra_classes }}">
+    {% for label, value in items %}
+      {{ stat_tile(label, value) }}
+    {% endfor %}
+  </div>
+{%- endmacro %}
+
+{% macro section_title(title, description=None) -%}
+  <div class="mb-4">
+    <h2 class="font-display text-lg font-semibold text-ink">{{ title }}</h2>
+    {% if description %}
+      <p class="mt-1 text-xs text-ink/50">{{ description }}</p>
+    {% endif %}
+  </div>
+{%- endmacro %}
+
+{% macro chart_panel(chart_id, chart_type, title, labels, values, height=220) -%}
+  <div class="msl-panel p-6">
+    {% if title %}<p class="mb-4 text-sm font-medium text-ink">{{ title }}</p>{% endif %}
+    {% if labels %}
+      <canvas id="{{ chart_id }}" data-chart-type="{{ chart_type }}" height="{{ height }}"></canvas>
+      <script type="application/json" data-chart-data-for="{{ chart_id }}">{{ {"labels": labels, "values": values} | tojson }}</script>
+    {% else %}
+      <p class="text-sm text-ink/50">No data available.</p>
+    {% endif %}
+  </div>
+{%- endmacro %}

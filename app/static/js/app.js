@@ -27,12 +27,13 @@ document.addEventListener("click", (event) => {
       panel.classList.toggle("hidden", panel.getAttribute("data-tab-panel") !== target);
     });
 
-    document.querySelectorAll("[data-tab-button]").forEach((button) => {
-      const active = button === tabButton;
-      button.classList.toggle("border-ink", active);
-      button.classList.toggle("text-ink", active);
-      button.classList.toggle("border-transparent", !active);
-      button.classList.toggle("text-ink/50", !active);
+    document.querySelectorAll("[data-tab-button], [data-tab-indicator]").forEach((el) => {
+      const key = el.getAttribute("data-tab-button") || el.getAttribute("data-tab-indicator");
+      const active = key === target;
+      el.classList.toggle("border-ink", active);
+      el.classList.toggle("text-ink", active);
+      el.classList.toggle("border-transparent", !active);
+      el.classList.toggle("text-ink/50", !active);
     });
   }
 });

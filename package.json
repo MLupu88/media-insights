@@ -4,9 +4,14 @@
   "version": "1.0.0",
   "scripts": {
     "build:css": "tailwindcss -i ./app/static/css/input.css -o ./app/static/css/app.css --minify",
-    "watch:css": "tailwindcss -i ./app/static/css/input.css -o ./app/static/css/app.css --watch"
+    "watch:css": "tailwindcss -i ./app/static/css/input.css -o ./app/static/css/app.css --watch",
+    "copy:vendor": "mkdir -p app/static/js/vendor && cp node_modules/chart.js/dist/chart.umd.min.js app/static/js/vendor/chart.umd.js && cp node_modules/chart.js/LICENSE.md app/static/js/vendor/CHART_JS_LICENSE.md",
+    "build": "npm run build:css && npm run copy:vendor"
   },
   "devDependencies": {
     "tailwindcss": "^3.4.17"
+  },
+  "dependencies": {
+    "chart.js": "4.5.1"
   }
 }

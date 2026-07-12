@@ -142,3 +142,34 @@ def article_factory(db_session):
         return articles
 
     return _create
+
+
+@pytest.fixture
+def classification_factory(db_session):
+    import uuid
+
+    from app.models.classification import Classification
+
+    def _create(article, **overrides):
+        defaults = dict(
+            id=uuid.uuid4(),
+            article_id=article.id,
+            project_id=article.project_id,
+            primary_topic="store_expansion",
+            secondary_topic=None,
+            communication_category="corporate",
+            sentiment="positive",
+            brand_role="primary_focus",
+            story_key=None,
+            confidence=0.9,
+            model="deepseek-chat",
+            prompt_version="retail-deepseek-v2",
+        )
+        defaults.update(overrides)
+        classification = Classification(**defaults)
+        db_session.add(classification)
+        db_session.commit()
+        db_session.refresh(classification)
+        return classification
+
+    return _create

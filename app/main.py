@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api import auth, classification, files, internal, pages
+from app.api import analytics, auth, classification, files, internal, pages
 from app.api import health as health_router
 from app.config import get_settings
 from app.database import get_db
@@ -42,3 +42,4 @@ app.include_router(files.router)
 app.include_router(classification.router)
 app.include_router(health_router.router)
 app.include_router(internal.router)
+app.include_router(analytics.router)
