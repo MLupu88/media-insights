@@ -591,3 +591,26 @@ def test_parse_analytics_filters_blank_values_become_none():
     filters = parse_analytics_filters({"brand": "", "publication": "   "})
     assert filters.brand is None
     assert filters.publication is None
+
+
+# ---------------------------------------------------------------------------
+# Deterministic ranking (Phase 5 touch-up: alphabetical tiebreaker)
+# ---------------------------------------------------------------------------
+
+
+def test_brand_ranking_ties_break_alphabetically(db_session, project_factory, article_factory):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Zebra Mart")
+    article_factory(project, count=1, retailer="Auchan")
+    article_factory(project, count=1, retailer="Metro")
+
+    result = get_project_analytics(db_session, project, AnalyticsFilters())
+    brands_in_order = [row["brand"] for row in result["brands"]["by_volume"]]
+
+    # All three brands tie on article_count=1 — alphabetical order is the
+    # deterministic tiebreaker, not incidental database fetch order.
+    assert brands_in_order == ["Auchan", "Metro", "Zebra Mart"]
+
+    # Repeating the query must yield the exact same order every time.
+    repeat = get_project_analytics(db_session, project, AnalyticsFilters())
+    assert [row["brand"] for row in repeat["brands"]["by_volume"]] == brands_in_order

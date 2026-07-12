@@ -72,6 +72,47 @@
     };
   }
 
+  function buildGroupedBarConfig(payload, horizontal) {
+    return {
+      type: "bar",
+      data: {
+        labels: payload.labels,
+        datasets: [
+          {
+            label: payload.baseline_label || "Baseline",
+            data: payload.baseline_values,
+            backgroundColor: INK,
+            borderRadius: 2,
+            maxBarThickness: 24,
+          },
+          {
+            label: payload.comparison_label || "Comparison",
+            data: payload.comparison_values,
+            backgroundColor: "rgba(17, 17, 17, 0.4)",
+            borderRadius: 2,
+            maxBarThickness: 24,
+          },
+        ],
+      },
+      options: {
+        indexAxis: horizontal ? "y" : "x",
+        responsive: true,
+        plugins: {
+          legend: {
+            display: true,
+            position: "bottom",
+            labels: { color: INK, boxWidth: 10, font: { size: 11 } },
+          },
+          tooltip: tooltipStyle(),
+        },
+        scales: {
+          x: { grid: { color: LINE, drawTicks: false }, beginAtZero: true },
+          y: { grid: { display: false } },
+        },
+      },
+    };
+  }
+
   function buildDoughnutConfig(payload, colorMap) {
     var ramp = inkRamp(payload.labels.length);
     var colors = payload.labels.map(function (label, i) {
@@ -110,6 +151,10 @@
         return buildBarConfig(payload, true);
       case "bar-vertical":
         return buildBarConfig(payload, false);
+      case "bar-horizontal-grouped":
+        return buildGroupedBarConfig(payload, true);
+      case "bar-vertical-grouped":
+        return buildGroupedBarConfig(payload, false);
       case "doughnut-sentiment":
         return buildDoughnutConfig(payload, SENTIMENT_COLORS);
       case "doughnut":

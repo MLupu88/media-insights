@@ -26,6 +26,7 @@ class KpiSummary(BaseModel):
     invalid_rows: int
     duplicate_rows: int
     duplicate_share_pct: float
+    cross_project_duplicates_excluded: int
     unique_valid_articles: int
     unique_classified_articles: int
     unique_unclassified_articles: int

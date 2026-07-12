@@ -2,20 +2,27 @@
 
 Single source of truth consumed by both the browser Analytics tab
 (`app/api/pages.py`) and the internal analytics API (`app/api/analytics.py`),
-so the two surfaces can never drift apart.
+so the two surfaces can never drift apart. Also the foundation for Phase 5's
+multi-project period comparisons (`app/services/comparison.py`), via
+`get_period_analytics`.
 
 Canonical population: unless documented otherwise, every figure in this module
 is computed over "unique valid articles" — `Article.import_status == 'valid'
 AND Article.is_duplicate == False`. The four raw "pipeline" KPI fields
 (total_imported_rows, valid_rows, invalid_rows, duplicate_rows,
 duplicate_share_pct) are the one exception: they always read directly from
-`Project.total_rows` / `valid_rows` / `invalid_rows` / `duplicate_rows` and are
-never affected by the analytics filters or by `top_n`.
+the summed `Project.total_rows` / `valid_rows` / `invalid_rows` /
+`duplicate_rows` of the project(s) in scope, and are never affected by the
+analytics filters or by `top_n`.
 
 `top_n` is presentation-only: every count/sum/percentage in this module is
 computed against the complete filtered population first; `top_n` is applied
 as the very last step, only to slice which already-computed ranked rows are
 returned. No percentage or denominator is ever computed from a truncated list.
+
+Rankings are deterministic: every sort uses an explicit secondary
+alphabetical tiebreaker (on brand/topic/publication/story_key/title) so exact
+ties never depend on incidental database fetch order.
 """
 
 import statistics
@@ -52,8 +59,8 @@ class AnalyticsFilters:
 def parse_analytics_filters(query_params) -> AnalyticsFilters:
     """Parse filters from a Starlette QueryParams (or any dict-like) mapping.
 
-    Used identically by the UI route and the internal API route so filter
-    semantics can never diverge between the two surfaces.
+    Used identically by the UI route(s) and the internal API route(s) so
+    filter semantics can never diverge between surfaces.
     """
 
     def _clean(name: str) -> str | None:
@@ -78,7 +85,7 @@ def parse_analytics_filters(query_params) -> AnalyticsFilters:
 
 
 def clamp_top_n(value) -> int:
-    """Forgiving top_n parser for the browser route (never raises)."""
+    """Forgiving top_n parser for browser routes (never raises)."""
     try:
         n = int(value)
     except (TypeError, ValueError):
@@ -120,12 +127,41 @@ def _fetch_entries(db: Session, project_id: uuid.UUID, filters: AnalyticsFilters
     return [(row[0], row[1]) for row in rows]
 
 
-def _available_filter_options(db: Session, project_id: uuid.UUID) -> dict:
-    """Always computed from the full unique-valid population, ignoring every
-    currently-active filter, so selecting one filter never removes options
-    from the other dropdowns.
+def _deduplicate_across_projects(entries: list[Entry]) -> tuple[list[Entry], int]:
+    """Collapse articles that share a fingerprint across more than one
+    project (each side already deduplicated *within* its own project by
+    Phase 2/4) down to a single canonical entry: earliest `created_at`, ties
+    broken by `id` ascending — matching the exact convention already used by
+    `app/services/imports.py::_load_seen_fingerprints`.
+
+    Returns the deduplicated entries and how many entries were removed.
     """
-    entries = _fetch_entries(db, project_id, AnalyticsFilters())
+    by_fingerprint: dict[str, list[Entry]] = defaultdict(list)
+    for article, classification in entries:
+        by_fingerprint[article.fingerprint].append((article, classification))
+
+    deduplicated: list[Entry] = []
+    removed_count = 0
+    for group in by_fingerprint.values():
+        if len(group) == 1:
+            deduplicated.append(group[0])
+            continue
+        canonical = min(group, key=lambda entry: (entry[0].created_at, entry[0].id))
+        deduplicated.append(canonical)
+        removed_count += len(group) - 1
+
+    return deduplicated, removed_count
+
+
+def _available_filter_options(db: Session, project_ids: list[uuid.UUID]) -> dict:
+    """Always computed from the full unique-valid population across the
+    given project(s), ignoring every currently-active filter, so selecting
+    one filter never removes options from the other dropdowns.
+    """
+    entries: list[Entry] = []
+    for project_id in project_ids:
+        entries.extend(_fetch_entries(db, project_id, AnalyticsFilters()))
+
     return {
         "brands": sorted({article.retailer for article, _ in entries}),
         "publications": sorted({article.source for article, _ in entries if article.source}),
@@ -167,7 +203,9 @@ def _reach_values(entries: list[Entry]) -> list[float]:
     return [article.audience for article, _ in entries if article.audience is not None]
 
 
-def _compute_kpis(project: Project, entries: list[Entry]) -> dict:
+def _compute_kpis(
+    projects: list[Project], entries: list[Entry], cross_project_duplicates_excluded: int
+) -> dict:
     unique_valid = len(entries)
     reach_values = _reach_values(entries)
     classified_entries = [e for e in entries if e[1] is not None]
@@ -176,13 +214,23 @@ def _compute_kpis(project: Project, entries: list[Entry]) -> dict:
     )
     publications = {article.source for article, _ in entries if article.source}
 
+    total_imported_rows = sum(p.total_rows for p in projects)
+    valid_rows = sum(p.valid_rows for p in projects)
+    invalid_rows = sum(p.invalid_rows for p in projects)
+    duplicate_rows = sum(p.duplicate_rows for p in projects)
+
     return {
-        # Pipeline KPIs: always project-wide, never affected by filters or top_n.
-        "total_imported_rows": project.total_rows,
-        "valid_rows": project.valid_rows,
-        "invalid_rows": project.invalid_rows,
-        "duplicate_rows": project.duplicate_rows,
-        "duplicate_share_pct": _safe_pct(project.duplicate_rows, project.valid_rows),
+        # Pipeline KPIs: always the summed project-wide totals, never
+        # affected by analytics filters or by top_n.
+        "total_imported_rows": total_imported_rows,
+        "valid_rows": valid_rows,
+        "invalid_rows": invalid_rows,
+        "duplicate_rows": duplicate_rows,
+        "duplicate_share_pct": _safe_pct(duplicate_rows, valid_rows),
+        # Only non-zero when combining more than one project into a period
+        # (Phase 5). Counted separately from duplicate_rows above, which
+        # remains each project's own Phase 2 within-project duplicate count.
+        "cross_project_duplicates_excluded": cross_project_duplicates_excluded,
         # Analytical KPIs: respect the active filters.
         "unique_valid_articles": unique_valid,
         "unique_classified_articles": len(classified_entries),
@@ -230,8 +278,8 @@ def _compute_brand_performance(entries: list[Entry], top_n: int) -> dict:
             }
         )
 
-    by_volume = sorted(brand_rows, key=lambda r: r["article_count"], reverse=True)
-    by_reach = sorted(brand_rows, key=lambda r: r["total_reach"], reverse=True)
+    by_volume = sorted(brand_rows, key=lambda r: (-r["article_count"], r["brand"]))
+    by_reach = sorted(brand_rows, key=lambda r: (-r["total_reach"], r["brand"]))
 
     return {
         "by_volume": by_volume[:top_n],
@@ -259,7 +307,7 @@ def _distribution(entries: list[Entry], key_fn, total: int) -> list[dict]:
                 "total_reach": round(sum(reach_values), 1) if reach_values else 0.0,
             }
         )
-    return sorted(result, key=lambda r: r["count"], reverse=True)
+    return sorted(result, key=lambda r: (-r["count"], r["value"]))
 
 
 def _topic_mix_by_brand(classified_entries: list[Entry]) -> list[dict]:
@@ -272,12 +320,13 @@ def _topic_mix_by_brand(classified_entries: list[Entry]) -> list[dict]:
     rows = []
     for brand, counter in matrix.items():
         total = brand_totals[brand]
+        ranked_topics = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
         rows.append(
             {
                 "brand": brand,
                 "topics": [
                     {"topic": topic, "count": count, "pct": _safe_pct(count, total)}
-                    for topic, count in counter.most_common()
+                    for topic, count in ranked_topics
                 ],
             }
         )
@@ -309,9 +358,9 @@ def _compute_topic_analytics(entries: list[Entry], top_n: int) -> dict:
         "communication_category_distribution": category_dist,
         "topic_mix_by_brand": _topic_mix_by_brand(classified_entries),
         "top_topics_by_volume": primary_dist[:top_n],
-        "top_topics_by_reach": sorted(primary_dist, key=lambda r: r["total_reach"], reverse=True)[
-            :top_n
-        ],
+        "top_topics_by_reach": sorted(
+            primary_dist, key=lambda r: (-r["total_reach"], r["value"])
+        )[:top_n],
     }
 
 
@@ -347,7 +396,9 @@ def _compute_sentiment_analytics(entries: list[Entry], top_n: int) -> dict:
         for article, classification in classified_entries
         if classification.confidence < LOW_CONFIDENCE_THRESHOLD
     ]
-    low_confidence_sorted = sorted(low_confidence_entries, key=lambda e: e[1].confidence)
+    low_confidence_sorted = sorted(
+        low_confidence_entries, key=lambda e: (e[1].confidence, e[0].title or "")
+    )
 
     return {
         "overall_distribution": overall,
@@ -407,8 +458,8 @@ def _compute_publications_and_stories(entries: list[Entry], top_n: int) -> dict:
             }
         )
 
-    pubs_by_volume = sorted(pub_rows, key=lambda r: r["article_count"], reverse=True)
-    pubs_by_reach = sorted(pub_rows, key=lambda r: r["total_reach"], reverse=True)
+    pubs_by_volume = sorted(pub_rows, key=lambda r: (-r["article_count"], r["publication"]))
+    pubs_by_reach = sorted(pub_rows, key=lambda r: (-r["total_reach"], r["publication"]))
 
     publication_concentration = {
         "top3_volume_pct": _concentration_pct(pubs_by_volume, 3, "article_count", total_unique),
@@ -418,8 +469,8 @@ def _compute_publications_and_stories(entries: list[Entry], top_n: int) -> dict:
     }
 
     # Story clustering is classified-only, and only for articles with a
-    # non-null story_key. See module docstring / plan for why this population
-    # is kept distinct from "all unique valid articles."
+    # non-null story_key. See module docstring for why this population is
+    # kept distinct from "all unique valid articles."
     classified_entries = [e for e in entries if e[1] is not None]
     with_story_key = [e for e in classified_entries if e[1].story_key]
     without_story_key_count = len(classified_entries) - len(with_story_key)
@@ -442,8 +493,8 @@ def _compute_publications_and_stories(entries: list[Entry], top_n: int) -> dict:
     total_story_articles = len(with_story_key)
     total_story_reach = sum(_reach_values(with_story_key))
 
-    stories_by_volume = sorted(story_rows, key=lambda r: r["article_count"], reverse=True)
-    stories_by_reach = sorted(story_rows, key=lambda r: r["total_reach"], reverse=True)
+    stories_by_volume = sorted(story_rows, key=lambda r: (-r["article_count"], r["story_key"]))
+    stories_by_reach = sorted(story_rows, key=lambda r: (-r["total_reach"], r["story_key"]))
 
     story_concentration = {
         "top3_volume_pct": _concentration_pct(
@@ -473,19 +524,37 @@ def _compute_publications_and_stories(entries: list[Entry], top_n: int) -> dict:
     }
 
 
-def get_project_analytics(
+def get_period_analytics(
     db: Session,
-    project: Project,
+    projects: list[Project],
     filters: AnalyticsFilters | None = None,
     top_n: int = DEFAULT_TOP_N,
 ) -> dict:
+    """Generalized, multi-project form of the Phase 4 analytics engine.
+
+    A "period" is the union of one or more projects' unique-valid articles.
+    For a single project this is exactly Phase 4's original computation. For
+    more than one, a cross-project fingerprint dedup pass runs first (see
+    `_deduplicate_across_projects`) so the same underlying article imported
+    into two projects is never double-counted.
+    """
+    if not projects:
+        raise ValueError("get_period_analytics requires at least one project.")
+
     filters = filters or AnalyticsFilters()
     top_n = max(MIN_TOP_N, min(MAX_TOP_N, top_n))
 
-    entries = _fetch_entries(db, project.id, filters)
+    all_entries: list[Entry] = []
+    for project in projects:
+        all_entries.extend(_fetch_entries(db, project.id, filters))
+
+    if len(projects) > 1:
+        entries, cross_project_duplicates_excluded = _deduplicate_across_projects(all_entries)
+    else:
+        entries, cross_project_duplicates_excluded = all_entries, 0
 
     return {
-        "project_id": project.id,
+        "project_ids": [p.id for p in projects],
         "filters": {
             "brand": filters.brand,
             "publication": filters.publication,
@@ -494,11 +563,28 @@ def get_project_analytics(
             "sentiment": filters.sentiment,
             "state": filters.state,
         },
-        "available_filter_options": _available_filter_options(db, project.id),
+        "available_filter_options": _available_filter_options(db, [p.id for p in projects]),
         "top_n": top_n,
-        "kpis": _compute_kpis(project, entries),
+        "kpis": _compute_kpis(projects, entries, cross_project_duplicates_excluded),
         "brands": _compute_brand_performance(entries, top_n),
         "topics": _compute_topic_analytics(entries, top_n),
         "sentiment": _compute_sentiment_analytics(entries, top_n),
         "publications_and_stories": _compute_publications_and_stories(entries, top_n),
     }
+
+
+def get_project_analytics(
+    db: Session,
+    project: Project,
+    filters: AnalyticsFilters | None = None,
+    top_n: int = DEFAULT_TOP_N,
+) -> dict:
+    """Phase 4's original single-project entrypoint. Thin wrapper over
+    `get_period_analytics([project])`, reshaped back to the exact response
+    shape Phase 4 shipped (`project_id`, not `project_ids`) so every existing
+    caller and test is completely unaffected.
+    """
+    result = get_period_analytics(db, [project], filters, top_n)
+    result = {**result, "project_id": project.id}
+    del result["project_ids"]
+    return result

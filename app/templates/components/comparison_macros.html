@@ -1,0 +1,67 @@
+{# Comparison-specific components (Phase 5). Kept separate from both
+   macros.html and analytics_macros.html so no Phase 1-4 markup is touched. #}
+
+{% macro delta_card(label, baseline, comparison, absolute_delta, percentage_delta, unit="") -%}
+  <div class="bg-paper px-6 py-6">
+    <p class="text-xs font-medium uppercase tracking-wide text-ink/50">{{ label }}</p>
+    <p class="mt-2 font-display text-2xl font-semibold text-ink">{{ comparison }}{{ unit }}</p>
+    <p class="mt-1 text-xs text-ink/40">was {{ baseline }}{{ unit }}</p>
+    <p class="mt-2 text-xs font-medium {% if absolute_delta is none %}text-ink/40{% elif absolute_delta > 0 %}text-ink{% elif absolute_delta < 0 %}text-accent{% else %}text-ink/40{% endif %}">
+      {%- if absolute_delta is none %}
+        No comparable data
+      {%- elif absolute_delta > 0 %}
+        ▲ +{{ absolute_delta }}{{ unit }}{% if percentage_delta is not none %} (+{{ percentage_delta }}%){% elif baseline == 0 %} (new){% endif %}
+      {%- elif absolute_delta < 0 %}
+        ▼ {{ absolute_delta }}{{ unit }}{% if percentage_delta is not none %} ({{ percentage_delta }}%){% endif %}
+      {%- else %}
+        — No change
+      {%- endif %}
+    </p>
+  </div>
+{%- endmacro %}
+
+{% macro delta_card_grid(cards, extra_classes="sm:grid-cols-3") -%}
+  <div class="grid grid-cols-1 gap-px overflow-hidden border border-line bg-line sm:grid-cols-2 {{ extra_classes }}">
+    {% for card in cards %}
+      {{ delta_card(card.label, card.baseline, card.comparison, card.absolute_delta, card.percentage_delta, card.unit|default("")) }}
+    {% endfor %}
+  </div>
+{%- endmacro %}
+
+{% macro pp_delta(value) -%}
+  {%- if value > 0 -%}
+    <span class="text-ink">+{{ value }} pp</span>
+  {%- elif value < 0 -%}
+    <span class="text-accent">{{ value }} pp</span>
+  {%- else -%}
+    <span class="text-ink/40">0.0 pp</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro rank_badge(rank_change, is_new_entrant, is_dropout) -%}
+  {%- if is_new_entrant -%}
+    <span class="inline-flex items-center border border-line px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-ink/70">New</span>
+  {%- elif is_dropout -%}
+    <span class="inline-flex items-center border border-accent/40 bg-accent/5 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-accent">Dropped</span>
+  {%- elif rank_change is none -%}
+    <span class="text-xs text-ink/30">—</span>
+  {%- elif rank_change > 0 -%}
+    <span class="text-xs font-medium text-ink">▲ {{ rank_change }}</span>
+  {%- elif rank_change < 0 -%}
+    <span class="text-xs font-medium text-accent">▼ {{ -rank_change }}</span>
+  {%- else -%}
+    <span class="text-xs text-ink/40">No change</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro grouped_chart_panel(chart_id, chart_type, title, labels, baseline_values, comparison_values, baseline_label="Baseline", comparison_label="Comparison", height=220) -%}
+  <div class="msl-panel p-6">
+    {% if title %}<p class="mb-4 text-sm font-medium text-ink">{{ title }}</p>{% endif %}
+    {% if labels %}
+      <canvas id="{{ chart_id }}" data-chart-type="{{ chart_type }}" height="{{ height }}"></canvas>
+      <script type="application/json" data-chart-data-for="{{ chart_id }}">{{ {"labels": labels, "baseline_values": baseline_values, "comparison_values": comparison_values, "baseline_label": baseline_label, "comparison_label": comparison_label} | tojson }}</script>
+    {% else %}
+      <p class="text-sm text-ink/50">No data available.</p>
+    {% endif %}
+  </div>
+{%- endmacro %}

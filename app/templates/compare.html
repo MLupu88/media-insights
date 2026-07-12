@@ -1,0 +1,431 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import empty_state %}
+{% from "components/analytics_macros.html" import section_title, stat_tile_grid %}
+{% from "components/comparison_macros.html" import delta_card_grid, pp_delta, rank_badge, grouped_chart_panel %}
+
+{% block title %}Compare projects — MSL The Practice Media Insights{% endblock %}
+
+{% block content %}
+<div class="msl-container py-14">
+  <a href="/" class="text-sm font-medium text-ink/50 transition hover:text-accent">← All projects</a>
+
+  <div class="mt-4 border-b border-line pb-8">
+    <h1 class="font-display text-4xl font-semibold text-ink">Compare projects</h1>
+    <p class="mt-2 max-w-xl text-sm text-ink/60">
+      Pick the project(s) for each side. Selecting two quarters of the same year (Q1+Q2, Q3+Q4)
+      or all four forms an automatic H1 / H2 / full-year view — combined articles are
+      deduplicated across projects so nothing is double-counted.
+    </p>
+  </div>
+
+  {% if error_message %}
+    <div class="mt-8 border border-accent/40 bg-accent/5 px-4 py-3 text-sm text-accent">
+      {{ error_message }}
+    </div>
+  {% endif %}
+
+  {% if projects | length < 2 %}
+    <div class="mt-8">
+      {{ empty_state(
+        "Not enough projects to compare",
+        "Create at least two analysis projects to compare periods against each other."
+      ) }}
+    </div>
+  {% else %}
+    <form method="get" action="/compare" class="msl-panel mt-8 p-6">
+      <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+        <div>
+          <label class="msl-label" for="baseline_project_ids">Baseline period</label>
+          <select id="baseline_project_ids" name="baseline_project_ids" multiple size="6" class="msl-input">
+            {% for project in projects %}
+              <option value="{{ project.id }}" {% if project.id | string in selected_baseline_ids %}selected{% endif %}>
+                {{ project.name }} — {{ project.quarter }}
+              </option>
+            {% endfor %}
+          </select>
+          <p class="mt-1 text-xs text-ink/50">Cmd/Ctrl-click to select more than one quarter.</p>
+        </div>
+        <div>
+          <label class="msl-label" for="comparison_project_ids">Comparison period</label>
+          <select id="comparison_project_ids" name="comparison_project_ids" multiple size="6" class="msl-input">
+            {% for project in projects %}
+              <option value="{{ project.id }}" {% if project.id | string in selected_comparison_ids %}selected{% endif %}>
+                {{ project.name }} — {{ project.quarter }}
+              </option>
+            {% endfor %}
+          </select>
+          <p class="mt-1 text-xs text-ink/50">Cmd/Ctrl-click to select more than one quarter.</p>
+        </div>
+      </div>
+
+      {% set opts = comparison_result.available_filter_options if comparison_result else None %}
+      <div class="mt-6 flex flex-wrap items-end gap-4">
+        <div>
+          <label class="msl-label" for="brand">Brand</label>
+          <select id="brand" name="brand" class="msl-input">
+            <option value="">All brands</option>
+            {% if opts %}{% for brand in opts.brands %}
+              <option value="{{ brand }}" {% if comparison_result.baseline.filters.brand == brand %}selected{% endif %}>{{ brand }}</option>
+            {% endfor %}{% endif %}
+          </select>
+        </div>
+        <div>
+          <label class="msl-label" for="publication">Publication</label>
+          <select id="publication" name="publication" class="msl-input">
+            <option value="">All publications</option>
+            {% if opts %}{% for pub in opts.publications %}
+              <option value="{{ pub }}" {% if comparison_result.baseline.filters.publication == pub %}selected{% endif %}>{{ pub }}</option>
+            {% endfor %}{% endif %}
+          </select>
+        </div>
+        <div>
+          <label class="msl-label" for="primary_topic">Primary topic</label>
+          <select id="primary_topic" name="primary_topic" class="msl-input">
+            <option value="">All topics</option>
+            {% if opts %}{% for topic in opts.primary_topics %}
+              <option value="{{ topic }}" {% if comparison_result.baseline.filters.primary_topic == topic %}selected{% endif %}>{{ topic }}</option>
+            {% endfor %}{% endif %}
+          </select>
+        </div>
+        <div>
+          <label class="msl-label" for="communication_category">Category</label>
+          <select id="communication_category" name="communication_category" class="msl-input">
+            <option value="">All categories</option>
+            {% if opts %}{% for category in opts.communication_categories %}
+              <option value="{{ category }}" {% if comparison_result.baseline.filters.communication_category == category %}selected{% endif %}>{{ category }}</option>
+            {% endfor %}{% endif %}
+          </select>
+        </div>
+        <div>
+          <label class="msl-label" for="sentiment">Sentiment</label>
+          <select id="sentiment" name="sentiment" class="msl-input">
+            <option value="">All sentiments</option>
+            {% if opts %}{% for sentiment in opts.sentiments %}
+              <option value="{{ sentiment }}" {% if comparison_result.baseline.filters.sentiment == sentiment %}selected{% endif %}>{{ sentiment }}</option>
+            {% endfor %}{% endif %}
+          </select>
+        </div>
+        <div>
+          <label class="msl-label" for="state">State</label>
+          <select id="state" name="state" class="msl-input">
+            <option value="all" {% if not comparison_result or comparison_result.baseline.filters.state == "all" %}selected{% endif %}>All valid</option>
+            <option value="classified" {% if comparison_result and comparison_result.baseline.filters.state == "classified" %}selected{% endif %}>Classified only</option>
+            <option value="unclassified" {% if comparison_result and comparison_result.baseline.filters.state == "unclassified" %}selected{% endif %}>Unclassified only</option>
+          </select>
+        </div>
+        <button type="submit" class="bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent">
+          Compare
+        </button>
+      </div>
+    </form>
+
+    {% if comparison_result %}
+      {% set deltas = comparison_result.deltas %}
+      {% set baseline = comparison_result.baseline %}
+      {% set comparison = comparison_result.comparison %}
+      {% set volatility = comparison_result.volatility %}
+
+      <div class="mt-10 flex items-center gap-4 text-sm text-ink/60">
+        <span class="border border-line px-3 py-1.5 font-medium text-ink">{{ baseline.label }}</span>
+        <span class="text-ink/30">vs</span>
+        <span class="border border-line px-3 py-1.5 font-medium text-ink">{{ comparison.label }}</span>
+      </div>
+
+      <div class="mt-8">
+        {{ section_title("Coverage volume", "Baseline → comparison, with the change directly below each figure.") }}
+        {% set kpi_cards = [
+          {"label": "Unique valid articles", "baseline": deltas.kpis.unique_valid_articles.baseline, "comparison": deltas.kpis.unique_valid_articles.comparison, "absolute_delta": deltas.kpis.unique_valid_articles.absolute_delta, "percentage_delta": deltas.kpis.unique_valid_articles.percentage_delta},
+          {"label": "Unique classified", "baseline": deltas.kpis.unique_classified_articles.baseline, "comparison": deltas.kpis.unique_classified_articles.comparison, "absolute_delta": deltas.kpis.unique_classified_articles.absolute_delta, "percentage_delta": deltas.kpis.unique_classified_articles.percentage_delta},
+          {"label": "Unique unclassified", "baseline": deltas.kpis.unique_unclassified_articles.baseline, "comparison": deltas.kpis.unique_unclassified_articles.comparison, "absolute_delta": deltas.kpis.unique_unclassified_articles.absolute_delta, "percentage_delta": deltas.kpis.unique_unclassified_articles.percentage_delta},
+          {"label": "Duplicate rows", "baseline": deltas.kpis.duplicate_rows.baseline, "comparison": deltas.kpis.duplicate_rows.comparison, "absolute_delta": deltas.kpis.duplicate_rows.absolute_delta, "percentage_delta": deltas.kpis.duplicate_rows.percentage_delta},
+          {"label": "Duplicate share", "baseline": deltas.kpis.duplicate_share_pct.baseline, "comparison": deltas.kpis.duplicate_share_pct.comparison, "absolute_delta": deltas.kpis.duplicate_share_pct.absolute_delta, "percentage_delta": None, "unit": "%"},
+          {"label": "Cross-project duplicates excluded", "baseline": deltas.kpis.cross_project_duplicates_excluded.baseline, "comparison": deltas.kpis.cross_project_duplicates_excluded.comparison, "absolute_delta": deltas.kpis.cross_project_duplicates_excluded.absolute_delta, "percentage_delta": None},
+        ] %}
+        {{ delta_card_grid(kpi_cards, "sm:grid-cols-3") }}
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Reach") }}
+        {% set reach_cards = [
+          {"label": "Total reach", "baseline": deltas.kpis.total_reach.baseline | number, "comparison": deltas.kpis.total_reach.comparison | number, "absolute_delta": deltas.kpis.total_reach.absolute_delta, "percentage_delta": deltas.kpis.total_reach.percentage_delta},
+          {"label": "Average reach", "baseline": deltas.kpis.average_reach.baseline | number, "comparison": deltas.kpis.average_reach.comparison | number, "absolute_delta": deltas.kpis.average_reach.absolute_delta, "percentage_delta": deltas.kpis.average_reach.percentage_delta},
+          {"label": "Median reach", "baseline": deltas.kpis.median_reach.baseline | number, "comparison": deltas.kpis.median_reach.comparison | number, "absolute_delta": deltas.kpis.median_reach.absolute_delta, "percentage_delta": deltas.kpis.median_reach.percentage_delta},
+        ] %}
+        {{ delta_card_grid(reach_cards, "sm:grid-cols-3") }}
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Share of Voice by brand", "SOV is volume-based; reach share is a separate secondary metric. Deltas are in percentage points (pp), never confused with a percentage change.") }}
+
+        {% if deltas.brands %}
+          <div class="msl-panel overflow-x-auto">
+            <table class="w-full min-w-[720px] text-left text-sm">
+              <thead>
+                <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                  <th class="px-4 py-3 font-medium">Brand</th>
+                  <th class="px-4 py-3 font-medium">Baseline SOV</th>
+                  <th class="px-4 py-3 font-medium">Comparison SOV</th>
+                  <th class="px-4 py-3 font-medium">SOV change</th>
+                  <th class="px-4 py-3 font-medium">Reach share change</th>
+                  <th class="px-4 py-3 font-medium">Rank</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in deltas.brands %}
+                  <tr class="border-b border-line last:border-b-0">
+                    <td class="px-4 py-3 font-medium text-ink">
+                      {{ row.brand }}
+                      {% if row.is_new_entrant %}<span class="ml-2 text-xs text-ink/40">(new)</span>{% endif %}
+                      {% if row.is_dropout %}<span class="ml-2 text-xs text-ink/40">(dropped)</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-3">{{ row.baseline_sov_pct }}%</td>
+                    <td class="px-4 py-3">{{ row.comparison_sov_pct }}%</td>
+                    <td class="px-4 py-3">{{ pp_delta(row.sov_delta_pp) }}</td>
+                    <td class="px-4 py-3">{{ pp_delta(row.reach_share_delta_pp) }}</td>
+                    <td class="px-4 py-3">{{ rank_badge(row.rank_change, row.is_new_entrant, row.is_dropout) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          {{ grouped_chart_panel(
+            "chart-brand-sov", "bar-horizontal-grouped", "SOV by brand",
+            deltas.brands | map(attribute="brand") | list,
+            deltas.brands | map(attribute="baseline_sov_pct") | list,
+            deltas.brands | map(attribute="comparison_sov_pct") | list,
+            baseline.label, comparison.label
+          ) }}
+        {% else %}
+          <p class="text-sm text-ink/50">No brand data in the current filter selection.</p>
+        {% endif %}
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Topic and category shifts", "Percentage-point change per topic/category. Emerging and declining lists are ranked by the size of that change.") }}
+
+        <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div>
+            <p class="mb-2 text-xs font-medium uppercase tracking-wide text-ink/50">Emerging topics</p>
+            <div class="msl-panel divide-y divide-line">
+              {% for item in deltas.topics.emerging %}
+                <div class="flex items-center justify-between px-4 py-2 text-sm">
+                  <span>{{ item.value }}</span>
+                  {{ pp_delta(item.pct_delta_pp) }}
+                </div>
+              {% else %}
+                <p class="px-4 py-3 text-sm text-ink/50">No classified topics yet.</p>
+              {% endfor %}
+            </div>
+          </div>
+          <div>
+            <p class="mb-2 text-xs font-medium uppercase tracking-wide text-ink/50">Declining topics</p>
+            <div class="msl-panel divide-y divide-line">
+              {% for item in deltas.topics.declining %}
+                <div class="flex items-center justify-between px-4 py-2 text-sm">
+                  <span>{{ item.value }}</span>
+                  {{ pp_delta(item.pct_delta_pp) }}
+                </div>
+              {% else %}
+                <p class="px-4 py-3 text-sm text-ink/50">No classified topics yet.</p>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        <p class="mt-4 text-xs font-medium uppercase tracking-wide text-ink/50">Communication categories</p>
+        <div class="msl-panel mt-2 overflow-x-auto">
+          <table class="w-full min-w-[480px] text-left text-sm">
+            <thead>
+              <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                <th class="px-4 py-3 font-medium">Category</th>
+                <th class="px-4 py-3 font-medium">Baseline</th>
+                <th class="px-4 py-3 font-medium">Comparison</th>
+                <th class="px-4 py-3 font-medium">Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in deltas.categories.rows %}
+                <tr class="border-b border-line last:border-b-0">
+                  <td class="px-4 py-3">{{ item.value }}</td>
+                  <td class="px-4 py-3">{{ item.baseline_pct }}%</td>
+                  <td class="px-4 py-3">{{ item.comparison_pct }}%</td>
+                  <td class="px-4 py-3">{{ pp_delta(item.pct_delta_pp) }}</td>
+                </tr>
+              {% else %}
+                <tr><td class="px-4 py-3 text-ink/50" colspan="4">No classified articles yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Sentiment and brand role", "Overall sentiment mix, plus the primary-focus vs. mentioned-only split.") }}
+
+        <div class="msl-panel overflow-x-auto">
+          <table class="w-full min-w-[480px] text-left text-sm">
+            <thead>
+              <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                <th class="px-4 py-3 font-medium">Sentiment</th>
+                <th class="px-4 py-3 font-medium">Baseline</th>
+                <th class="px-4 py-3 font-medium">Comparison</th>
+                <th class="px-4 py-3 font-medium">Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in deltas.sentiment.rows %}
+                <tr class="border-b border-line last:border-b-0">
+                  <td class="px-4 py-3">{{ item.value }}</td>
+                  <td class="px-4 py-3">{{ item.baseline_pct }}%</td>
+                  <td class="px-4 py-3">{{ item.comparison_pct }}%</td>
+                  <td class="px-4 py-3">{{ pp_delta(item.pct_delta_pp) }}</td>
+                </tr>
+              {% else %}
+                <tr><td class="px-4 py-3 text-ink/50" colspan="4">No classified articles yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <p class="mt-6 mb-2 text-xs font-medium uppercase tracking-wide text-ink/50">Brand role</p>
+        <div class="msl-panel overflow-x-auto">
+          <table class="w-full min-w-[480px] text-left text-sm">
+            <thead>
+              <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                <th class="px-4 py-3 font-medium">Role</th>
+                <th class="px-4 py-3 font-medium">Baseline</th>
+                <th class="px-4 py-3 font-medium">Comparison</th>
+                <th class="px-4 py-3 font-medium">Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in deltas.brand_role.rows %}
+                <tr class="border-b border-line last:border-b-0">
+                  <td class="px-4 py-3">{{ item.value }}</td>
+                  <td class="px-4 py-3">{{ item.baseline_pct }}%</td>
+                  <td class="px-4 py-3">{{ item.comparison_pct }}%</td>
+                  <td class="px-4 py-3">{{ pp_delta(item.pct_delta_pp) }}</td>
+                </tr>
+              {% else %}
+                <tr><td class="px-4 py-3 text-ink/50" colspan="4">No classified articles yet.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Publication movement", "Ranking is computed against the full result set (up to 50 entities), never truncated by the display limit above.") }}
+
+        {% if deltas.publications_by_volume %}
+          <div class="msl-panel overflow-x-auto">
+            <table class="w-full min-w-[480px] text-left text-sm">
+              <thead>
+                <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                  <th class="px-4 py-3 font-medium">Publication</th>
+                  <th class="px-4 py-3 font-medium">Baseline rank</th>
+                  <th class="px-4 py-3 font-medium">Comparison rank</th>
+                  <th class="px-4 py-3 font-medium">Movement</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in deltas.publications_by_volume[:20] %}
+                  <tr class="border-b border-line last:border-b-0">
+                    <td class="px-4 py-3">{{ row.publication }}</td>
+                    <td class="px-4 py-3">{{ row.baseline_rank or "—" }}</td>
+                    <td class="px-4 py-3">{{ row.comparison_rank or "—" }}</td>
+                    <td class="px-4 py-3">{{ rank_badge(row.rank_change, row.is_new_entrant, row.is_dropout) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="text-sm text-ink/50">No publication data in the current filter selection.</p>
+        {% endif %}
+
+        <div class="mt-6">
+          {% set concentration = deltas.publication_concentration %}
+          {% set concentration_cards = [
+            {"label": "Top 3 by volume", "baseline": concentration.top3_volume_pct.baseline, "comparison": concentration.top3_volume_pct.comparison, "absolute_delta": concentration.top3_volume_pct.delta_pp, "percentage_delta": None, "unit": "%"},
+            {"label": "Top 5 by volume", "baseline": concentration.top5_volume_pct.baseline, "comparison": concentration.top5_volume_pct.comparison, "absolute_delta": concentration.top5_volume_pct.delta_pp, "percentage_delta": None, "unit": "%"},
+            {"label": "Top 3 by reach", "baseline": concentration.top3_reach_pct.baseline, "comparison": concentration.top3_reach_pct.comparison, "absolute_delta": concentration.top3_reach_pct.delta_pp, "percentage_delta": None, "unit": "%"},
+            {"label": "Top 5 by reach", "baseline": concentration.top5_reach_pct.baseline, "comparison": concentration.top5_reach_pct.comparison, "absolute_delta": concentration.top5_reach_pct.delta_pp, "percentage_delta": None, "unit": "%"},
+          ] %}
+          {{ delta_card_grid(concentration_cards, "sm:grid-cols-4") }}
+        </div>
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Story movement", "Story clustering is classified-only. Same full-ranking rule as publications above.") }}
+
+        {% if deltas.stories_by_volume %}
+          <div class="msl-panel overflow-x-auto">
+            <table class="w-full min-w-[480px] text-left text-sm">
+              <thead>
+                <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+                  <th class="px-4 py-3 font-medium">Story</th>
+                  <th class="px-4 py-3 font-medium">Baseline rank</th>
+                  <th class="px-4 py-3 font-medium">Comparison rank</th>
+                  <th class="px-4 py-3 font-medium">Movement</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in deltas.stories_by_volume[:20] %}
+                  <tr class="border-b border-line last:border-b-0">
+                    <td class="px-4 py-3">{{ row.story_key }}</td>
+                    <td class="px-4 py-3">{{ row.baseline_rank or "—" }}</td>
+                    <td class="px-4 py-3">{{ row.comparison_rank or "—" }}</td>
+                    <td class="px-4 py-3">{{ rank_badge(row.rank_change, row.is_new_entrant, row.is_dropout) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="text-sm text-ink/50">No story clusters in the current filter selection yet.</p>
+        {% endif %}
+
+        <div class="mt-6">
+          {% set story_concentration = deltas.story_concentration %}
+          {% set story_concentration_cards = [
+            {"label": "Top 3 by volume", "baseline": story_concentration.top3_volume_pct.baseline, "comparison": story_concentration.top3_volume_pct.comparison, "absolute_delta": story_concentration.top3_volume_pct.delta_pp, "percentage_delta": None, "unit": "%"},
+            {"label": "Top 5 by volume", "baseline": story_concentration.top5_volume_pct.baseline, "comparison": story_concentration.top5_volume_pct.comparison, "absolute_delta": story_concentration.top5_volume_pct.delta_pp, "percentage_delta": None, "unit": "%"},
+            {"label": "Top 3 by reach", "baseline": story_concentration.top3_reach_pct.baseline, "comparison": story_concentration.top3_reach_pct.comparison, "absolute_delta": story_concentration.top3_reach_pct.delta_pp, "percentage_delta": None, "unit": "%"},
+            {"label": "Top 5 by reach", "baseline": story_concentration.top5_reach_pct.baseline, "comparison": story_concentration.top5_reach_pct.comparison, "absolute_delta": story_concentration.top5_reach_pct.delta_pp, "percentage_delta": None, "unit": "%"},
+          ] %}
+          {{ delta_card_grid(story_concentration_cards, "sm:grid-cols-4") }}
+        </div>
+      </div>
+
+      <div class="mt-12">
+        {{ section_title("Volatility between periods", "How much the rankings reshuffled: average rank movement among entities present in both periods, plus new entrants and dropouts.") }}
+        {{ stat_tile_grid([
+          ("Publications: avg rank change", volatility.publications.avg_rank_change if volatility.publications.avg_rank_change is not none else "—"),
+          ("Publications: new entrants", volatility.publications.entrants_count),
+          ("Publications: dropouts", volatility.publications.dropouts_count),
+          ("Stories: avg rank change", volatility.stories.avg_rank_change if volatility.stories.avg_rank_change is not none else "—"),
+          ("Stories: new entrants", volatility.stories.entrants_count),
+          ("Stories: dropouts", volatility.stories.dropouts_count),
+        ], "sm:grid-cols-3") }}
+      </div>
+    {% else %}
+      <div class="mt-10">
+        {{ empty_state(
+          "No comparison yet",
+          "Select a baseline and a comparison period above, then click Compare."
+        ) }}
+      </div>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/app.js"></script>
+{% if comparison_result %}
+  <script src="/static/js/vendor/chart.umd.js"></script>
+  <script src="/static/js/charts.js"></script>
+{% endif %}
+{% endblock %}

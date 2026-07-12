@@ -12,6 +12,7 @@ from app.schemas.project import ProjectCreate
 from app.security.auth import require_web_session
 from app.services.analytics import clamp_top_n, get_project_analytics, parse_analytics_filters
 from app.services.classification import get_project_summary
+from app.services.comparison import ComparisonServiceError, get_period_comparison
 from app.services.projects import create_project, list_projects
 
 router = APIRouter(dependencies=[Depends(require_web_session)])
@@ -136,3 +137,44 @@ def project_detail_page(
         )
     active_tab = tab if tab in ("overview", "files", "classification", "analytics") else "overview"
     return render_project_detail(request, db, project, active_tab=active_tab)
+
+
+@router.get("/compare")
+def compare_page(request: Request, db: Session = Depends(get_db)):
+    projects = list_projects(db)
+
+    def _parse_ids(param_name: str) -> list[uuid.UUID]:
+        parsed: list[uuid.UUID] = []
+        for value in request.query_params.getlist(param_name):
+            try:
+                parsed.append(uuid.UUID(value))
+            except (ValueError, AttributeError):
+                continue
+        return parsed
+
+    baseline_project_ids = _parse_ids("baseline_project_ids")
+    comparison_project_ids = _parse_ids("comparison_project_ids")
+
+    comparison_result = None
+    error_message = None
+    if baseline_project_ids and comparison_project_ids:
+        filters = parse_analytics_filters(request.query_params)
+        top_n = clamp_top_n(request.query_params.get("top_n"))
+        try:
+            comparison_result = get_period_comparison(
+                db, baseline_project_ids, comparison_project_ids, filters, top_n=top_n
+            )
+        except ComparisonServiceError as exc:
+            error_message = exc.message
+
+    return render(
+        request,
+        "compare.html",
+        {
+            "projects": projects,
+            "selected_baseline_ids": {str(pid) for pid in baseline_project_ids},
+            "selected_comparison_ids": {str(pid) for pid in comparison_project_ids},
+            "comparison_result": comparison_result,
+            "error_message": error_message,
+        },
+    )
