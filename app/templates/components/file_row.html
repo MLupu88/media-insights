@@ -1,0 +1,42 @@
+{% from "components/macros.html" import status_badge %}
+
+<div class="border-b border-line px-6 py-5 last:border-b-0">
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-12 sm:items-center sm:gap-4">
+    <div class="sm:col-span-4">
+      <p class="truncate font-medium text-ink" title="{{ uploaded_file.original_filename }}">
+        {{ uploaded_file.original_filename }}
+      </p>
+      <p class="mt-1 text-xs text-ink/50">
+        {{ uploaded_file.detected_retailer or uploaded_file.retailer_hint or "Retailer not detected" }}
+      </p>
+    </div>
+
+    <div class="sm:col-span-2">{{ status_badge(uploaded_file.status) }}</div>
+
+    <div class="text-xs text-ink/60 sm:col-span-4">
+      <div class="flex flex-wrap gap-x-4 gap-y-1">
+        <span>{{ uploaded_file.row_count }} rows</span>
+        <span>{{ uploaded_file.valid_row_count }} valid</span>
+        <span>{{ uploaded_file.invalid_row_count }} invalid</span>
+        <span>{{ uploaded_file.duplicate_row_count }} duplicates</span>
+      </div>
+      <div class="mt-1 text-ink/40">Updated {{ uploaded_file.updated_at.strftime("%d %b %Y, %H:%M") }}</div>
+    </div>
+
+    <div class="sm:col-span-2 sm:text-right">
+      {% if uploaded_file.status == "failed" %}
+        <form action="/projects/{{ uploaded_file.project_id }}/files/{{ uploaded_file.id }}/retry" method="post">
+          <button type="submit" class="text-sm font-medium text-accent transition hover:text-ink">
+            Retry import
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if uploaded_file.status == "failed" and uploaded_file.error_message %}
+    <p class="mt-3 border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-accent">
+      {{ uploaded_file.error_message }}
+    </p>
+  {% endif %}
+</div>

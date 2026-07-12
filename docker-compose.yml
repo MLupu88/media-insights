@@ -1,0 +1,46 @@
+services:
+  msl-insights-db:
+    image: postgres:16-alpine
+    container_name: msl-insights-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-msl}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-msl}
+      POSTGRES_DB: ${POSTGRES_DB:-msl_insights}
+    volumes:
+      - msl_insights_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-msl} -d ${POSTGRES_DB:-msl_insights}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  msl-insights:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: msl-insights
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-msl}:${POSTGRES_PASSWORD:-msl}@msl-insights-db:5432/${POSTGRES_DB:-msl_insights}
+      UPLOAD_ROOT_DIR: /app/data/uploads
+    ports:
+      - "8000:8000"
+    volumes:
+      - msl_insights_uploads:/app/data/uploads
+    depends_on:
+      msl-insights-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  msl_insights_db_data:
+  msl_insights_uploads:

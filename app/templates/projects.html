@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import button, status_badge, alert, empty_state %}
+
+{% block title %}Media analysis projects — MSL The Practice Media Insights{% endblock %}
+
+{% block content %}
+<div class="msl-container py-14">
+  <div class="flex flex-col gap-6 border-b border-line pb-8 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <h1 class="font-display text-4xl font-semibold text-ink">Media analysis projects</h1>
+      <p class="mt-3 max-w-xl text-sm text-ink/60">
+        Upload retailer media-monitoring workbooks, classify coverage with DeepSeek, and export
+        enriched analysis — one project per reporting quarter.
+      </p>
+    </div>
+    <div>
+      {{ button("New analysis", variant="primary", attrs='data-modal-open="new-project-modal"') }}
+    </div>
+  </div>
+
+  {% if not_found_id is defined %}
+    <div class="mt-8">
+      {{ alert("That project could not be found. It may have been removed.", "error") }}
+    </div>
+  {% endif %}
+
+  <div class="mt-10">
+    {% if projects %}
+      <div class="msl-panel">
+        <div class="hidden grid-cols-12 gap-4 border-b border-line px-6 py-3 text-xs font-medium uppercase tracking-wide text-ink/50 sm:grid">
+          <div class="col-span-4">Project</div>
+          <div class="col-span-2">Quarter</div>
+          <div class="col-span-2">Status</div>
+          <div class="col-span-3">Progress</div>
+          <div class="col-span-1"></div>
+        </div>
+        {% for project in projects %}
+          {% include "components/project_row.html" %}
+        {% endfor %}
+      </div>
+    {% else %}
+      {{ empty_state(
+        "No projects yet",
+        "Create your first analysis project to start uploading retailer media-monitoring workbooks.",
+        "New analysis",
+        'data-modal-open="new-project-modal"'
+      ) }}
+    {% endif %}
+  </div>
+</div>
+
+{% include "components/modal.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/app.js"></script>
+{% endblock %}

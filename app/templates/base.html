@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}MSL The Practice Media Insights{% endblock %}</title>
+  <link rel="icon" href="/static/brand/msl-the-practice-logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:opsz,wght@20..72,500;20..72,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body class="flex min-h-full flex-col bg-paper text-ink">
+  {% include "components/header.html" %}
+  <main class="flex-1">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="border-t border-line py-6">
+    <div class="msl-container text-xs text-ink/40">
+      MSL The Practice Media Insights
+    </div>
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import alert %}
+
+{% block title %}Sign in — MSL The Practice Media Insights{% endblock %}
+
+{% block content %}
+<div class="msl-container flex min-h-[70vh] items-center justify-center">
+  <div class="w-full max-w-sm">
+    <div class="mb-8 text-center">
+      <img src="/static/brand/msl-the-practice-logo-cropped.png" alt="MSL The Practice" class="mx-auto h-7 w-auto" />
+      <h1 class="mt-6 font-display text-3xl font-semibold text-ink">Media Insights</h1>
+      <p class="mt-2 text-sm text-ink/60">Sign in to continue to your analysis projects.</p>
+    </div>
+
+    <div class="msl-panel p-8">
+      {% if error %}
+        <div class="mb-5">{{ alert(error, "error") }}</div>
+      {% endif %}
+      <form method="post" action="/login" class="space-y-5">
+        <div>
+          <label class="msl-label" for="password">Password</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autofocus
+            required
+            class="msl-input"
+          />
+        </div>
+        <button type="submit" class="w-full bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent">
+          Sign in
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

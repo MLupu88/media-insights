@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% from "components/macros.html" import status_badge, empty_state %}
+
+{% block title %}{{ project.name }} — MSL The Practice Media Insights{% endblock %}
+
+{% block content %}
+<div class="msl-container py-14">
+  <a href="/" class="text-sm font-medium text-ink/50 transition hover:text-accent">← All projects</a>
+
+  <div class="mt-4 flex flex-col gap-4 border-b border-line pb-8 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h1 class="font-display text-4xl font-semibold text-ink">{{ project.name }}</h1>
+      <p class="mt-2 text-sm text-ink/60">{{ project.quarter }}{% if project.description %} · {{ project.description }}{% endif %}</p>
+    </div>
+    {{ status_badge(project.status) }}
+  </div>
+
+  <nav class="mt-8 flex gap-8 border-b border-line">
+    <button
+      type="button"
+      data-tab-button="overview"
+      class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'overview' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
+    >
+      Overview
+    </button>
+    <button
+      type="button"
+      data-tab-button="files"
+      class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'files' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
+    >
+      Files
+    </button>
+    <button
+      type="button"
+      data-tab-button="classification"
+      class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'classification' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
+    >
+      Classification
+    </button>
+  </nav>
+
+  <div data-tab-panel="overview" class="{% if active_tab != 'overview' %}hidden{% endif %} mt-10">
+    <div class="grid grid-cols-2 gap-px overflow-hidden border border-line bg-line sm:grid-cols-3 lg:grid-cols-6">
+      {% set stats = [
+        ("Files", project.total_files),
+        ("Total rows", project.total_rows),
+        ("Valid rows", project.valid_rows),
+        ("Invalid rows", project.invalid_rows),
+        ("Duplicates", project.duplicate_rows),
+        ("Classified", project.classified_rows),
+      ] %}
+      {% for label, value in stats %}
+        <div class="bg-paper px-6 py-6">
+          <p class="text-xs font-medium uppercase tracking-wide text-ink/50">{{ label }}</p>
+          <p class="mt-2 font-display text-2xl font-semibold text-ink">{{ value }}</p>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="mt-10 border border-dashed border-line px-8 py-16 text-center">
+      <p class="font-display text-xl text-ink">Article review and insights coming soon</p>
+      <p class="mx-auto mt-2 max-w-sm text-sm text-ink/60">
+        Article review, narrative insights and exports for this project will appear here in a
+        later phase.
+      </p>
+    </div>
+  </div>
+
+  <div data-tab-panel="files" class="{% if active_tab != 'files' %}hidden{% endif %} mt-10">
+    {% if upload_results %}
+      <div class="mb-6 space-y-2">
+        {% for result in upload_results %}
+          <div class="border px-4 py-3 text-sm {% if result.accepted %}border-line bg-white text-ink{% else %}border-accent/40 bg-accent/5 text-accent{% endif %}">
+            {% if result.filename %}<span class="font-medium">{{ result.filename }}</span> — {% endif %}
+            {% if result.accepted %}
+              uploaded and {% if result.status == "failed" %}import failed{% else %}imported{% endif %}.
+            {% else %}
+              {{ result.reason }}
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <form
+      action="/projects/{{ project.id }}/files"
+      method="post"
+      enctype="multipart/form-data"
+      class="msl-panel border-dashed px-8 py-10 text-center"
+    >
+      <p class="font-display text-lg text-ink">Upload media-monitoring workbooks</p>
+      <p class="mx-auto mt-2 max-w-sm text-sm text-ink/60">
+        Select one or more .xlsx files (up to 100 MB each). Files are imported and normalized
+        immediately.
+      </p>
+      <div class="mt-6 flex flex-col items-center gap-4">
+        <input
+          type="file"
+          name="files"
+          multiple
+          accept=".xlsx"
+          required
+          class="msl-input max-w-sm"
+        />
+        <button type="submit" class="bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent">
+          Upload files
+        </button>
+      </div>
+    </form>
+
+    <div class="mt-8">
+      {% if uploaded_files %}
+        <div class="msl-panel">
+          {% for uploaded_file in uploaded_files %}
+            {% include "components/file_row.html" %}
+          {% endfor %}
+        </div>
+      {% else %}
+        {{ empty_state(
+          "No files uploaded yet",
+          "Upload retailer media-monitoring workbooks above to begin importing and normalizing records."
+        ) }}
+      {% endif %}
+    </div>
+  </div>
+
+  <div data-tab-panel="classification" class="{% if active_tab != 'classification' %}hidden{% endif %} mt-10">
+    {% if classification_message %}
+      <div class="mb-6 border px-4 py-3 text-sm {% if classification_message.type == 'error' %}border-accent/40 bg-accent/5 text-accent{% elif classification_message.type == 'success' %}border-line bg-white text-ink{% else %}border-line bg-paper text-ink/70{% endif %}">
+        {{ classification_message.text }}
+      </div>
+    {% endif %}
+
+    {% if classification_summary.valid_rows == 0 %}
+      {{ empty_state(
+        "No valid articles to classify yet",
+        "Import a media-monitoring workbook with valid rows in the Files section, then start classification."
+      ) }}
+    {% else %}
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+          <form action="/projects/{{ project.id }}/classification/start" method="post">
+            <button
+              type="submit"
+              class="bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
+              {% if project.analysis_status in ("queued", "running") %}disabled{% endif %}
+            >
+              Start classification
+            </button>
+          </form>
+          <a href="/projects/{{ project.id }}?tab=classification" class="text-sm font-medium text-ink/60 transition hover:text-ink">
+            Refresh status
+          </a>
+        </div>
+        {{ status_badge(project.analysis_status) }}
+      </div>
+
+      <div class="mt-6">
+        <div class="flex items-center justify-between text-xs text-ink/50">
+          <span>Classification progress</span>
+          <span>{{ classification_summary.classification_percentage }}%</span>
+        </div>
+        <div class="mt-2 h-1.5 w-full bg-line">
+          <div class="h-1.5 bg-ink" style="width: {{ classification_summary.classification_percentage }}%"></div>
+        </div>
+      </div>
+
+      <div class="mt-8 grid grid-cols-2 gap-px overflow-hidden border border-line bg-line sm:grid-cols-3">
+        {% set classification_stats = [
+          ("Valid articles", classification_summary.valid_rows),
+          ("Classified", classification_summary.classified_rows),
+          ("Unclassified", classification_summary.unclassified_valid_rows),
+          ("Low confidence", classification_summary.low_confidence_count),
+          ("Active batches", classification_summary.active_batch_count),
+          ("Failed batches", classification_summary.failed_batch_count),
+        ] %}
+        {% for label, value in classification_stats %}
+          <div class="bg-paper px-6 py-6">
+            <p class="text-xs font-medium uppercase tracking-wide text-ink/50">{{ label }}</p>
+            <p class="mt-2 font-display text-2xl font-semibold text-ink">{{ value }}</p>
+          </div>
+        {% endfor %}
+      </div>
+
+      <p class="mt-6 text-xs text-ink/50">
+        {% if classification_summary.last_classification_at %}
+          Last classification run: {{ classification_summary.last_classification_at.strftime("%d %b %Y, %H:%M") }}
+        {% else %}
+          No classification run has completed yet.
+        {% endif %}
+      </p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/app.js"></script>
+{% endblock %}

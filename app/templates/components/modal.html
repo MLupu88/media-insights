@@ -1,0 +1,49 @@
+{% from "components/macros.html" import form_field %}
+
+<div
+  id="new-project-modal"
+  class="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4 {% if not open_modal %}hidden{% endif %}"
+  data-modal
+>
+  <div class="w-full max-w-md border border-line bg-paper shadow-xl">
+    <div class="flex items-center justify-between border-b border-line px-6 py-4">
+      <h2 class="font-display text-lg font-semibold text-ink">New analysis project</h2>
+      <button type="button" class="text-ink/50 transition hover:text-ink" data-modal-close aria-label="Close">
+        &times;
+      </button>
+    </div>
+
+    <form method="post" action="/projects" class="space-y-5 px-6 py-6">
+      {{ form_field(
+        "name", "Project name",
+        value=form_values.get("name", ""),
+        error=form_errors.get("name"),
+        placeholder="e.g. Auchan Q2 2026",
+        required=True
+      ) }}
+      {{ form_field(
+        "quarter", "Quarter",
+        value=form_values.get("quarter", ""),
+        error=form_errors.get("quarter"),
+        placeholder="2026-Q2",
+        hint="Format: YYYY-Q1 to YYYY-Q4",
+        required=True
+      ) }}
+      {{ form_field(
+        "description", "Description (optional)",
+        value=form_values.get("description", ""),
+        error=form_errors.get("description"),
+        placeholder="Optional context for this analysis"
+      ) }}
+
+      <div class="flex items-center justify-end gap-3 pt-2">
+        <button type="button" class="px-4 py-2 text-sm font-medium text-ink/60 transition hover:text-ink" data-modal-close>
+          Cancel
+        </button>
+        <button type="submit" class="bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent">
+          Create project
+        </button>
+      </div>
+    </form>
+  </div>
+</div>

@@ -1,0 +1,76 @@
+{% macro button(label, variant="primary", type="button", attrs="") -%}
+  {% if variant == "primary" %}
+    {% set classes = "inline-flex items-center justify-center gap-2 bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent" %}
+  {% elif variant == "secondary" %}
+    {% set classes = "inline-flex items-center justify-center gap-2 border border-ink px-5 py-2.5 text-sm font-medium text-ink transition hover:border-accent hover:text-accent" %}
+  {% else %}
+    {% set classes = "inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium text-ink/60 transition hover:text-ink" %}
+  {% endif %}
+  <button type="{{ type }}" class="{{ classes }}" {{ attrs|safe }}>{{ label }}</button>
+{%- endmacro %}
+
+{% macro status_badge(status) -%}
+  {% set labels = {
+    "created": "Created",
+    "importing": "Importing",
+    "imported": "Imported",
+    "classifying": "Classifying",
+    "classified": "Classified",
+    "analyzed": "Analyzed",
+    "not_started": "Not started",
+    "in_progress": "In progress",
+    "complete": "Complete",
+    "failed": "Failed",
+    "pending": "Pending",
+    "processing": "Processing",
+    "completed": "Completed",
+    "queued": "Queued",
+    "running": "Running",
+    "partially_complete": "Partially complete",
+  } %}
+  <span class="inline-flex items-center gap-1.5 border border-line px-2.5 py-1 text-xs font-medium uppercase tracking-wide text-ink/70">
+    <span class="h-1.5 w-1.5 rounded-full {% if status in ('failed',) %}bg-accent{% elif status in ('analyzed', 'complete', 'completed') %}bg-ink{% else %}bg-ink/30{% endif %}"></span>
+    {{ labels.get(status, status) }}
+  </span>
+{%- endmacro %}
+
+{% macro alert(message, variant="error") -%}
+  {% if message %}
+    <div class="border {% if variant == 'error' %}border-accent/40 bg-accent/5 text-accent{% else %}border-line bg-white text-ink{% endif %} px-4 py-3 text-sm" role="alert">
+      {{ message }}
+    </div>
+  {% endif %}
+{%- endmacro %}
+
+{% macro form_field(name, label, value="", type="text", error=None, placeholder="", hint=None, required=False) -%}
+  <div>
+    <label class="msl-label" for="field-{{ name }}">{{ label }}{% if required %} *{% endif %}</label>
+    <input
+      id="field-{{ name }}"
+      name="{{ name }}"
+      type="{{ type }}"
+      value="{{ value }}"
+      placeholder="{{ placeholder }}"
+      class="msl-input {% if error %}border-accent{% endif %}"
+      {% if required %}required{% endif %}
+    />
+    {% if hint and not error %}
+      <p class="mt-1 text-xs text-ink/50">{{ hint }}</p>
+    {% endif %}
+    {% if error %}
+      <p class="mt-1 text-xs text-accent">{{ error }}</p>
+    {% endif %}
+  </div>
+{%- endmacro %}
+
+{% macro empty_state(title, description, action_label=None, action_attrs="") -%}
+  <div class="border border-dashed border-line px-8 py-16 text-center">
+    <p class="font-display text-xl text-ink">{{ title }}</p>
+    <p class="mx-auto mt-2 max-w-sm text-sm text-ink/60">{{ description }}</p>
+    {% if action_label %}
+      <button type="button" class="mt-6 inline-flex items-center justify-center gap-2 bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent" {{ action_attrs|safe }}>
+        {{ action_label }}
+      </button>
+    {% endif %}
+  </div>
+{%- endmacro %}
