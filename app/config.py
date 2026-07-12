@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     n8n_narrative_webhook_url: str = (
         "https://n8n.aiexperiments.eu/webhook/retail-media/analyze"
     )
+    n8n_chat_webhook_url: str = (
+        "https://n8n.aiexperiments.eu/webhook/retail-media/chat"
+    )
     n8n_request_timeout_seconds: float = 15.0
 
     upload_root_dir: str = "data/uploads"

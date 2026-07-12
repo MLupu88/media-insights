@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "components/chat_macros.html" import chat_ask_form, chat_message_bubble, chat_pending_run_notice %}
+
+{% block title %}Chat — MSL The Practice Media Insights{% endblock %}
+
+{% block content %}
+<div class="msl-container py-14">
+  {% if chat_session.baseline_project_ids %}
+    <a href="/compare" class="text-sm font-medium text-ink/50 transition hover:text-accent">← Back to comparison</a>
+  {% else %}
+    <a href="/projects/{{ chat_session.project_id }}?tab=chat" class="text-sm font-medium text-ink/50 transition hover:text-accent">← Back to project chat</a>
+  {% endif %}
+
+  <div class="mt-4 border-b border-line pb-8">
+    <h1 class="font-display text-4xl font-semibold text-ink">
+      {{ "Comparison" if chat_session.baseline_project_ids else "Project" }} chat
+    </h1>
+    <p class="mt-2 max-w-xl text-sm text-ink/60">
+      Answers are grounded strictly in this scope's analytics, period comparison, and validated
+      insights — never invented.
+    </p>
+  </div>
+
+  {% set latest_run = chat_session.runs[-1] if chat_session.runs else None %}
+
+  <div class="mt-8 space-y-3">
+    {% for message in chat_session.messages %}
+      {{ chat_message_bubble(message) }}
+    {% else %}
+      <p class="text-sm text-ink/50">No questions asked yet.</p>
+    {% endfor %}
+  </div>
+
+  {% if latest_run and latest_run.status in ("pending", "running", "failed") %}
+    <div class="mt-3">
+      {{ chat_pending_run_notice(latest_run) }}
+    </div>
+  {% endif %}
+
+  {{ chat_ask_form(
+    "/chat-sessions/" ~ chat_session.id ~ "/ask",
+    disabled=(latest_run is not none and latest_run.status in ("pending", "running"))
+  ) }}
+</div>
+{% endblock %}

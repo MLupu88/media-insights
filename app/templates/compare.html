@@ -145,6 +145,35 @@
       </div>
 
       <div class="mt-8">
+        {{ section_title("Ask about this comparison", "Answers are grounded strictly in this baseline/comparison selection — never anchored to one side.") }}
+        {% if chat_session %}
+          <a href="/chat-sessions/{{ chat_session.id }}" class="text-sm font-medium text-ink underline transition hover:text-accent">
+            View conversation ({{ chat_session.messages | length }} message(s)) →
+          </a>
+        {% else %}
+          <form action="/compare/chat/ask" method="post" class="flex gap-3">
+            {% for pid in baseline.project_ids %}
+              <input type="hidden" name="baseline_project_ids" value="{{ pid }}" />
+            {% endfor %}
+            {% for pid in comparison.project_ids %}
+              <input type="hidden" name="comparison_project_ids" value="{{ pid }}" />
+            {% endfor %}
+            <input
+              type="text"
+              name="question"
+              required
+              maxlength="2000"
+              placeholder="Ask a question about this comparison…"
+              class="msl-input flex-1"
+            />
+            <button type="submit" class="bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent">
+              Ask
+            </button>
+          </form>
+        {% endif %}
+      </div>
+
+      <div class="mt-8">
         {{ section_title("Coverage volume", "Baseline → comparison, with the change directly below each figure.") }}
         {% set kpi_cards = [
           {"label": "Unique valid articles", "baseline": deltas.kpis.unique_valid_articles.baseline, "comparison": deltas.kpis.unique_valid_articles.comparison, "absolute_delta": deltas.kpis.unique_valid_articles.absolute_delta, "percentage_delta": deltas.kpis.unique_valid_articles.percentage_delta},

@@ -60,3 +60,28 @@ def trigger_narrative_generation(generation_id: uuid.UUID, project_id: uuid.UUID
             f"The narrative generation service returned an unexpected status "
             f"({response.status_code})."
         )
+
+
+def trigger_chat_run(run_id: uuid.UUID, session_id: uuid.UUID) -> None:
+    settings = get_settings()
+    payload = {
+        "secret": settings.media_app_internal_secret,
+        "run_id": str(run_id),
+        "session_id": str(session_id),
+    }
+
+    try:
+        response = httpx.post(
+            settings.n8n_chat_webhook_url,
+            json=payload,
+            timeout=settings.n8n_request_timeout_seconds,
+        )
+    except httpx.TimeoutException as exc:
+        raise N8nTriggerError("The chat service timed out.") from exc
+    except httpx.RequestError as exc:
+        raise N8nTriggerError(f"Could not reach the chat service: {exc}") from exc
+
+    if not (200 <= response.status_code < 300):
+        raise N8nTriggerError(
+            f"The chat service returned an unexpected status ({response.status_code})."
+        )

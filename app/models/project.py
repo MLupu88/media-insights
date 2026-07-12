@@ -96,3 +96,10 @@ class Project(Base):
         order_by="NarrativeGeneration.created_at.desc()",
         foreign_keys="NarrativeGeneration.project_id",
     )
+    chat_sessions = relationship(
+        "ChatSession",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="ChatSession.created_at.desc()",
+        foreign_keys="ChatSession.project_id",
+    )

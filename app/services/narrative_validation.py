@@ -66,7 +66,7 @@ def resolve_path(data, path: str):
     return current
 
 
-def _numeric_match(actual, expected) -> bool:
+def numeric_match(actual, expected) -> bool:
     if isinstance(actual, bool) or isinstance(expected, bool):
         return False
     if not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
@@ -148,7 +148,7 @@ def validate_candidate(
                 ValidationResult(False, f"Evidence path not found: {entry.path!r}."),
                 candidate,
             )
-        if not _numeric_match(actual_value, entry.value):
+        if not numeric_match(actual_value, entry.value):
             return (
                 ValidationResult(
                     False,

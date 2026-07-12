@@ -46,9 +46,19 @@ class NarrativeGeneration(Base):
     )
 
     narrative_types: Mapped[list] = mapped_column(JSONB, nullable=False)
-    baseline_project_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    comparison_project_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    filters: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # `none_as_null=True` so a Python `None` binds to true SQL NULL rather
+    # than the JSONB scalar `null` — otherwise `.is_(None)`/`.isnot(None)`
+    # queries against these columns silently misbehave (a JSONB `null` is
+    # not SQL NULL in Postgres). See app/services/chat_tools.py, which
+    # queries baseline_project_ids this way to distinguish project- from
+    # comparison-scoped generations.
+    baseline_project_ids: Mapped[list | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    comparison_project_ids: Mapped[list | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    filters: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
 
     # Immutable payload captured once at creation time. Never recomputed —
     # the payload-fetch endpoint and the results validator both read this

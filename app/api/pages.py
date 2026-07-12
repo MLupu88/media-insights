@@ -11,6 +11,7 @@ from app.models.project import Project
 from app.schemas.project import ProjectCreate
 from app.security.auth import require_web_session
 from app.services.analytics import clamp_top_n, get_project_analytics, parse_analytics_filters
+from app.services.chat_service import find_comparison_session, get_project_own_chat_session
 from app.services.classification import get_project_summary
 from app.services.comparison import ComparisonServiceError, get_period_comparison
 from app.services.narrative_service import get_project_narrative_generations
@@ -46,6 +47,7 @@ def render_project_detail(
     upload_results: list[dict] | None = None,
     classification_message: dict | None = None,
     narrative_message: dict | None = None,
+    chat_message: dict | None = None,
     status_code: int = 200,
 ):
     uploaded_files = list(
@@ -63,6 +65,10 @@ def render_project_detail(
     if active_tab == "insights":
         narrative_generations = get_project_narrative_generations(db, project.id)
 
+    chat_session = None
+    if active_tab == "chat":
+        chat_session = get_project_own_chat_session(db, project.id)
+
     return render(
         request,
         "project_detail.html",
@@ -76,6 +82,8 @@ def render_project_detail(
             "analytics_summary": analytics_summary,
             "narrative_generations": narrative_generations,
             "narrative_message": narrative_message,
+            "chat_session": chat_session,
+            "chat_message": chat_message,
         },
         status_code=status_code,
     )
@@ -145,7 +153,7 @@ def project_detail_page(
         )
     active_tab = (
         tab
-        if tab in ("overview", "files", "classification", "analytics", "insights")
+        if tab in ("overview", "files", "classification", "analytics", "insights", "chat")
         else "overview"
     )
     return render_project_detail(request, db, project, active_tab=active_tab)
@@ -169,6 +177,7 @@ def compare_page(request: Request, db: Session = Depends(get_db)):
 
     comparison_result = None
     error_message = None
+    chat_session = None
     if baseline_project_ids and comparison_project_ids:
         filters = parse_analytics_filters(request.query_params)
         top_n = clamp_top_n(request.query_params.get("top_n"))
@@ -178,6 +187,9 @@ def compare_page(request: Request, db: Session = Depends(get_db)):
             )
         except ComparisonServiceError as exc:
             error_message = exc.message
+        chat_session = find_comparison_session(
+            db, baseline_project_ids, comparison_project_ids, filters
+        )
 
     return render(
         request,
@@ -187,6 +199,7 @@ def compare_page(request: Request, db: Session = Depends(get_db)):
             "selected_baseline_ids": {str(pid) for pid in baseline_project_ids},
             "selected_comparison_ids": {str(pid) for pid in comparison_project_ids},
             "comparison_result": comparison_result,
+            "chat_session": chat_session,
             "error_message": error_message,
         },
     )

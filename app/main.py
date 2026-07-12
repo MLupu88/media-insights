@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api import analytics, auth, classification, comparison, files, internal, pages
+from app.api import analytics, auth, chat, chat_internal, classification, comparison, files, internal, pages
 from app.api import health as health_router
 from app.api import narrative_generations, narratives
 from app.config import get_settings
@@ -47,3 +47,5 @@ app.include_router(analytics.router)
 app.include_router(comparison.router)
 app.include_router(narratives.router)
 app.include_router(narrative_generations.router)
+app.include_router(chat.router)
+app.include_router(chat_internal.router)

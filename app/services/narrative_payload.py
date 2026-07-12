@@ -18,10 +18,7 @@ top-ranked brands/topics/publications/stories already surfaced in `data`,
 never a raw scan of the full population.
 """
 
-import hashlib
-import json
 import uuid
-from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,20 +32,9 @@ from app.services.analytics import (
     get_project_analytics,
 )
 from app.services.comparison import get_period_comparison
+from app.services.json_safe import hash_json, to_json_safe
 
 EVIDENCE_ARTICLES_PER_ENTITY = 3
-
-
-def _to_json_safe(value):
-    if isinstance(value, dict):
-        return {key: _to_json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_to_json_safe(item) for item in value]
-    if isinstance(value, uuid.UUID):
-        return str(value)
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    return value
 
 
 def _evidence_base_query(project_ids: list[uuid.UUID], filters: AnalyticsFilters):
@@ -143,7 +129,7 @@ def build_project_snapshot(
     filters = filters or AnalyticsFilters()
     analytics = get_project_analytics(db, project, filters, top_n=top_n)
     evidence_pool = _sample_evidence_articles(db, [project.id], filters, analytics)
-    return _to_json_safe(
+    return to_json_safe(
         {"scope": "project", "data": analytics, "evidence_pool": evidence_pool}
     )
 
@@ -171,7 +157,7 @@ def build_comparison_snapshot(
         item for item in comparison_pool if item["article_id"] not in seen_ids
     ]
 
-    return _to_json_safe(
+    return to_json_safe(
         {"scope": "comparison", "data": comparison, "evidence_pool": evidence_pool}
     )
 
@@ -190,5 +176,4 @@ def compute_input_hash(
         "narrative_types": sorted(narrative_types),
         "prompt_contract_version": prompt_contract_version,
     }
-    canonical = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hash_json(canonical_payload)

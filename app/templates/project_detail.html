@@ -2,6 +2,7 @@
 {% from "components/macros.html" import status_badge, empty_state %}
 {% from "components/analytics_macros.html" import stat_tile_grid, section_title, chart_panel %}
 {% from "components/insight_macros.html" import narrative_generation_row %}
+{% from "components/chat_macros.html" import chat_ask_form, chat_message_bubble, chat_pending_run_notice %}
 
 {% block title %}{{ project.name }} — MSL The Practice Media Insights{% endblock %}
 
@@ -52,6 +53,13 @@
       class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'insights' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
     >
       Insights
+    </a>
+    <a
+      href="/projects/{{ project.id }}?tab=chat"
+      data-tab-indicator="chat"
+      class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'chat' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
+    >
+      Chat
     </a>
   </nav>
 
@@ -561,6 +569,45 @@
           <p class="text-sm text-ink/50">No narrative generations yet.</p>
         {% endif %}
       </div>
+    {% endif %}
+  </div>
+
+  <div data-tab-panel="chat" class="{% if active_tab != 'chat' %}hidden{% endif %} mt-10">
+    {% if chat_message %}
+      <div class="mb-6 border px-4 py-3 text-sm {% if chat_message.type == 'error' %}border-accent/40 bg-accent/5 text-accent{% else %}border-line bg-paper text-ink/70{% endif %}">
+        {{ chat_message.text }}
+      </div>
+    {% endif %}
+
+    {% if classification_summary.valid_rows == 0 %}
+      {{ empty_state(
+        "No valid articles to ask about yet",
+        "Import a media-monitoring workbook with valid rows, then return here to ask questions about this project's coverage."
+      ) }}
+    {% else %}
+      {% set latest_run = chat_session.runs[-1] if chat_session and chat_session.runs else None %}
+
+      {{ section_title("Ask about this project's coverage", "Answers are grounded strictly in this project's analytics and validated insights — never invented.") }}
+
+      {% if chat_session %}
+        <div class="space-y-3">
+          {% for message in chat_session.messages %}
+            {{ chat_message_bubble(message) }}
+          {% endfor %}
+        </div>
+        {% if latest_run and latest_run.status in ("pending", "running", "failed") %}
+          <div class="mt-3">
+            {{ chat_pending_run_notice(latest_run) }}
+          </div>
+        {% endif %}
+      {% else %}
+        <p class="text-sm text-ink/50">No questions asked yet.</p>
+      {% endif %}
+
+      {{ chat_ask_form(
+        "/projects/" ~ project.id ~ "/chat/ask",
+        disabled=(latest_run is not none and latest_run.status in ("pending", "running"))
+      ) }}
     {% endif %}
   </div>
 </div>

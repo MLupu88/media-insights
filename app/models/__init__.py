@@ -1,4 +1,12 @@
 from app.models.article import Article, ImportStatus
+from app.models.chat import (
+    ChatMessage,
+    ChatMessageRole,
+    ChatRun,
+    ChatRunStatus,
+    ChatSession,
+    ChatValidationStatus,
+)
 from app.models.classification import (
     Classification,
     ClassificationBatch,
@@ -32,4 +40,10 @@ __all__ = [
     "NarrativeGenerationStatus",
     "NarrativeInsight",
     "NarrativeValidationStatus",
+    "ChatSession",
+    "ChatMessage",
+    "ChatRun",
+    "ChatRunStatus",
+    "ChatMessageRole",
+    "ChatValidationStatus",
 ]
