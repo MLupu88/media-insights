@@ -46,7 +46,7 @@
       data-tab-indicator="review"
       class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'review' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
     >
-      Review{% if needs_review_count %} ({{ needs_review_count }}){% endif %}
+      Review{% if review_backlog_count %} ({{ review_backlog_count }}){% endif %}
     </a>
     <a
       href="/projects/{{ project.id }}?tab=analytics"
@@ -283,6 +283,11 @@
   </div>
 
   <div data-tab-panel="analytics" class="{% if active_tab != 'analytics' %}hidden{% endif %} mt-10">
+    {% if analytics_message %}
+      <div class="mb-6 border px-4 py-3 text-sm {% if analytics_message.type == 'error' %}border-accent/40 bg-accent/5 text-accent{% else %}border-line bg-paper text-ink/70{% endif %}">
+        {{ analytics_message.text }}
+      </div>
+    {% endif %}
     {% if not project.total_rows %}
       {{ empty_state(
         "No files uploaded yet",
@@ -302,14 +307,9 @@
 
       {% include "components/analytics_filters.html" %}
 
-      {% set export_params = {
-        "brand": analytics_summary.filters.brand,
-        "publication": analytics_summary.filters.publication,
-        "primary_topic": analytics_summary.filters.primary_topic,
-        "communication_category": analytics_summary.filters.communication_category,
-        "sentiment": analytics_summary.filters.sentiment,
-        "state": analytics_summary.filters.state,
-      } %}
+      {# export_params is computed server-side from the same normalized
+         AnalyticsFilters object the query used, via serialize_analytics_filters
+         -- never reconstructed here from the response's full-fidelity echo. #}
       <div class="mt-4 flex flex-wrap gap-4 text-sm">
         <a href="/projects/{{ project.id }}/report.pptx?{{ build_query_string(export_params) }}" class="font-medium text-ink underline transition hover:text-accent">
           Export current view to PowerPoint
@@ -345,8 +345,16 @@
             ("Median reach", kpis.median_reach | number),
             ("Publications", kpis.publication_count),
             ("Low-confidence classifications", kpis.low_confidence_count),
+            ("Needs brand review", kpis.current_view_needs_review_count),
           ], "sm:grid-cols-4") }}
         </div>
+        {% if kpis.current_view_needs_review_count %}
+          <p class="mt-3 text-xs text-ink/40">
+            {{ kpis.current_view_needs_review_count }} article(s) in the current view have no confirmed brand yet —
+            included in the totals above, excluded from every brand ranking/share below.
+            <a href="/projects/{{ project.id }}?tab=review" class="underline transition hover:text-accent">Resolve in Review</a>.
+          </p>
+        {% endif %}
         {% if kpis.reach_missing_count %}
           <p class="mt-3 text-xs text-ink/40">
             Reach is missing for {{ kpis.reach_missing_count }} of {{ kpis.unique_valid_articles }}

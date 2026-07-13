@@ -10,7 +10,7 @@ execution and answer validation each happen at most once per run.
 
 import json
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from pydantic import BaseModel
@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 from app.models.chat import ChatMessage, ChatRun, ChatSession
 from app.models.project import Project
 from app.schemas.chat import AnswerSubmission, PlanSubmission
-from app.services.analytics import AnalyticsFilters
+from app.services.analytics import AnalyticsFilters, serialize_analytics_filters
+from app.services.analytics_filters import serialize_phase_c_analytics_filters
 from app.services.chat_contract import (
     MAX_CONVERSATION_HISTORY_MESSAGES,
     MAX_QUESTION_LENGTH,
@@ -74,15 +75,15 @@ class AnswerOutcome:
 # --- Session identity -----------------------------------------------------
 
 
-def compute_scope_key(
+def _scope_key_payload(
     kind: str,
     project_id: uuid.UUID | None,
     baseline_project_ids: list[uuid.UUID] | None,
     comparison_project_ids: list[uuid.UUID] | None,
-    filters: AnalyticsFilters,
+    serialized_filters: dict,
     language: str,
-) -> str:
-    payload = {
+) -> dict:
+    return {
         "kind": kind,
         "project_id": str(project_id) if project_id else None,
         "baseline_project_ids": sorted({str(pid) for pid in baseline_project_ids})
@@ -91,10 +92,98 @@ def compute_scope_key(
         "comparison_project_ids": sorted({str(pid) for pid in comparison_project_ids})
         if comparison_project_ids
         else None,
-        "filters": asdict(filters),
+        "filters": serialized_filters,
         "language": language,
     }
+
+
+def compute_scope_key(
+    kind: str,
+    project_id: uuid.UUID | None,
+    baseline_project_ids: list[uuid.UUID] | None,
+    comparison_project_ids: list[uuid.UUID] | None,
+    filters: AnalyticsFilters,
+    language: str,
+    comparison_filters: AnalyticsFilters | None = None,
+) -> str:
+    """`comparison_filters` (Phase E — same-project brand-vs-brand
+    comparison): when baseline and comparison sides use genuinely
+    different filters, `filters` (the baseline side) alone is not enough
+    to distinguish e.g. an "Auchan vs Carrefour" session from a "Lidl vs
+    Profi" one for the same project pair -- both must be folded into the
+    scope_key, or two different brand-pair chat sessions would collide
+    into one row. Omitted (the default) for every existing call shape.
+    """
+    payload = _scope_key_payload(
+        kind, project_id, baseline_project_ids, comparison_project_ids,
+        serialize_analytics_filters(filters), language,
+    )
+    if comparison_filters is not None:
+        payload["comparison_filter_identity"] = serialize_analytics_filters(comparison_filters)
     return hash_json(payload)
+
+
+def _compute_legacy_phase_c_scope_key(
+    kind: str,
+    project_id: uuid.UUID | None,
+    baseline_project_ids: list[uuid.UUID] | None,
+    comparison_project_ids: list[uuid.UUID] | None,
+    filters: AnalyticsFilters,
+    language: str,
+) -> str:
+    """Reproduces the exact Phase C `compute_scope_key` payload shape
+    (six-field `filters`, always present -- see
+    `serialize_phase_c_analytics_filters`'s docstring), so a `ChatSession`
+    created before this correction remains reachable by the same logical
+    filter request. Used only for fallback reads, never for new writes.
+    """
+    payload = _scope_key_payload(
+        kind, project_id, baseline_project_ids, comparison_project_ids,
+        serialize_phase_c_analytics_filters(filters), language,
+    )
+    return hash_json(payload)
+
+
+def _find_by_scope_key(db: Session, scope_key: str) -> ChatSession | None:
+    return db.execute(
+        select(ChatSession).where(ChatSession.scope_key == scope_key)
+    ).scalar_one_or_none()
+
+
+def _find_existing_session(
+    db: Session,
+    kind: str,
+    project_id: uuid.UUID | None,
+    baseline_project_ids: list[uuid.UUID] | None,
+    comparison_project_ids: list[uuid.UUID] | None,
+    filters: AnalyticsFilters,
+    language: str,
+    comparison_filters: AnalyticsFilters | None = None,
+) -> tuple[str, ChatSession | None]:
+    """Returns the canonical scope_key plus, if found, an existing session
+    -- checking the canonical key first, then (only when it differs) the
+    exact legacy Phase C key, so a pre-existing session is reused rather
+    than silently duplicated. On a legacy hit, the session is returned
+    as-is; only future writes use the canonical key. The legacy fallback
+    never includes `comparison_filters` -- Phase C had no such concept.
+    """
+    scope_key = compute_scope_key(
+        kind, project_id, baseline_project_ids, comparison_project_ids, filters, language,
+        comparison_filters=comparison_filters,
+    )
+    existing = _find_by_scope_key(db, scope_key)
+    if existing is not None:
+        return scope_key, existing
+
+    legacy_scope_key = _compute_legacy_phase_c_scope_key(
+        kind, project_id, baseline_project_ids, comparison_project_ids, filters, language
+    )
+    if legacy_scope_key != scope_key:
+        existing = _find_by_scope_key(db, legacy_scope_key)
+        if existing is not None:
+            return scope_key, existing
+
+    return scope_key, None
 
 
 def _upsert_session(
@@ -110,6 +199,8 @@ def _upsert_session(
     """Concurrency-safe find-or-create: an `ON CONFLICT DO NOTHING` upsert
     on the unique `scope_key`, never a check-then-insert race. Two
     simultaneous requests for the same scope always resolve to one row.
+    Always writes the canonical filter shape -- see
+    `serialize_analytics_filters`.
     """
     stmt = (
         pg_insert(ChatSession)
@@ -117,7 +208,7 @@ def _upsert_session(
             project_id=project_id,
             baseline_project_ids=baseline_project_ids,
             comparison_project_ids=comparison_project_ids,
-            filters=asdict(filters),
+            filters=serialize_analytics_filters(filters),
             language=language,
             scope_key=scope_key,
         )
@@ -138,7 +229,11 @@ def find_or_create_project_session(
     db: Session, project: Project, filters: AnalyticsFilters | None = None, language: str = "ro"
 ) -> ChatSession:
     filters = filters or AnalyticsFilters()
-    scope_key = compute_scope_key("project", project.id, None, None, filters, language)
+    scope_key, existing = _find_existing_session(
+        db, "project", project.id, None, None, filters, language
+    )
+    if existing is not None:
+        return existing
     return _upsert_session(
         db,
         scope_key,
@@ -156,7 +251,16 @@ def find_or_create_comparison_session(
     comparison_project_ids: list[uuid.UUID],
     filters: AnalyticsFilters | None = None,
     language: str = "ro",
+    comparison_filters: AnalyticsFilters | None = None,
 ) -> ChatSession:
+    """`comparison_filters` (Phase E): when given and distinct from
+    `filters`, distinguishes this session's scope_key from a different
+    same-project brand-pair's session (see `compute_scope_key`). The
+    session's own stored `filters`/tool-execution scope remains `filters`
+    (the baseline side) -- chat tool execution is not yet split-filter
+    aware; this only prevents two different brand-pair sessions from
+    colliding into one row.
+    """
     filters = filters or AnalyticsFilters()
     unique_baseline = sorted({str(pid) for pid in baseline_project_ids})
     unique_comparison = sorted({str(pid) for pid in comparison_project_ids})
@@ -164,9 +268,12 @@ def find_or_create_comparison_session(
         raise ChatServiceError(
             "Both baseline and comparison project selections are required.", 422
         )
-    scope_key = compute_scope_key(
-        "comparison", None, baseline_project_ids, comparison_project_ids, filters, language
+    scope_key, existing = _find_existing_session(
+        db, "comparison", None, baseline_project_ids, comparison_project_ids, filters, language,
+        comparison_filters=comparison_filters,
     )
+    if existing is not None:
+        return existing
     anchor_project_id = uuid.UUID(unique_baseline[0])
     return _upsert_session(
         db,
@@ -196,20 +303,22 @@ def find_comparison_session(
     comparison_project_ids: list[uuid.UUID],
     filters: AnalyticsFilters | None = None,
     language: str = "ro",
+    comparison_filters: AnalyticsFilters | None = None,
 ) -> ChatSession | None:
     """Read-only lookup for the comparison chat area on `/compare` — shows
     a "View conversation" link if a session already exists, never creates
-    one on a page load.
+    one on a page load. `comparison_filters` (Phase E) distinguishes a
+    same-project brand-pair session from a different brand-pair session
+    for the same project pair -- see `compute_scope_key`.
     """
     if not baseline_project_ids or not comparison_project_ids:
         return None
     filters = filters or AnalyticsFilters()
-    scope_key = compute_scope_key(
-        "comparison", None, baseline_project_ids, comparison_project_ids, filters, language
+    _scope_key, existing = _find_existing_session(
+        db, "comparison", None, baseline_project_ids, comparison_project_ids, filters, language,
+        comparison_filters=comparison_filters,
     )
-    return db.execute(
-        select(ChatSession).where(ChatSession.scope_key == scope_key)
-    ).scalar_one_or_none()
+    return existing
 
 
 # --- Planning snapshot ------------------------------------------------------

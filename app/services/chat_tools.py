@@ -42,8 +42,10 @@ from app.services.analytics import (
     DEFAULT_TOP_N,
     MAX_TOP_N,
     AnalyticsFilters,
+    apply_common_filters,
     get_period_analytics,
     get_project_analytics,
+    parse_analytics_filters,
 )
 from app.services.comparison import get_period_comparison as _get_period_comparison_service
 from app.services.json_safe import to_json_safe
@@ -77,7 +79,12 @@ class ChatScopeContext:
 
 
 def build_scope_context(db: Session, session: ChatSession) -> ChatScopeContext:
-    filters = AnalyticsFilters(**(session.filters or {}))
+    # Reuses the same canonical parser used for URL query strings, not a
+    # raw kwarg splat -- correctly reads all three historical persisted
+    # shapes (Phase C, the interim pre-correction Phase D shape, and the
+    # final canonical shape) and produces properly-typed UUIDs, unlike a
+    # direct `AnalyticsFilters(**(session.filters or {}))` splat would.
+    filters = parse_analytics_filters(session.filters or {})
     if session.baseline_project_ids:
         baseline_projects = [
             db.get(Project, uuid.UUID(pid)) for pid in session.baseline_project_ids
@@ -157,8 +164,7 @@ def _articles_query(project_ids: list[uuid.UUID], filters: AnalyticsFilters):
         )
         .order_by(Article.id)
     )
-    if filters.brand:
-        stmt = stmt.where(Article.retailer == filters.brand)
+    stmt = apply_common_filters(stmt, filters)
     if filters.publication:
         stmt = stmt.where(Article.source == filters.publication)
     if filters.primary_topic:

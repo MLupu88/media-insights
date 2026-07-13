@@ -23,65 +23,62 @@ returned. No percentage or denominator is ever computed from a truncated list.
 Rankings are deterministic: every sort uses an explicit secondary
 alphabetical tiebreaker (on brand/topic/publication/story_key/title) so exact
 ties never depend on incidental database fetch order.
+
+Needs-review semantics (Phase D — reporting-scope): an article with
+`retailer_review_status == 'needs_review'` has no confirmed canonical
+brand. It is never represented as a fake brand ("Unknown"/"Needs
+Review"/etc.) anywhere. The rule, applied consistently:
+
+- Project-level totals (`_compute_kpis` — unique valid articles, reach,
+  publication count, ...) always include needs-review articles, because
+  they ARE otherwise-valid imported coverage; excluding them would
+  understate "how much was actually imported."
+- Every BRAND-KEYED view (brand rankings/shares, topic-mix-by-brand,
+  sentiment-by-brand) always EXCLUDES needs-review articles from its own
+  grouping and denominators, because they cannot be attributed to any
+  brand — including them would either require inventing a pseudo-brand
+  bucket (never done) or silently understate every real brand's share
+  for a reason that has nothing to do with competitive dynamics.
+- `AnalyticsFilters.include_needs_review` is an explicit, separate flag
+  used only to add needs-review rows into (or isolate them within) the
+  filtered *population* the request is asking about — it never overrides
+  the brand-keyed exclusion rule above.
+
+Future phases must not reinterpret this: needs-review is a *data-quality
+state*, never a brand.
+
+The filter contract itself (`AnalyticsFilters`, its parser/serializer, and
+the shared `apply_common_filters` WHERE-clause helper) lives in
+`app.services.analytics_filters`, a leaf module with no dependency on this
+one -- `report_data.py`/`chat_tools.py`/`narrative_payload.py` all need it
+too, and keeping it here would create an import cycle. This module
+re-exports it unchanged for backward compatibility.
 """
 
 import statistics
 import uuid
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
-from app.models.article import Article, ImportStatus
+from app.models.article import Article, ImportStatus, RetailerReviewStatus
 from app.models.classification import LOW_CONFIDENCE_THRESHOLD, Classification, ClassificationTaxonomy
 from app.models.project import Project
+from app.models.uploaded_file import UploadedFile
+from app.services.analytics_filters import (  # noqa: F401 -- re-exported for backward compatibility
+    AnalyticsFilterError,
+    AnalyticsFilters,
+    apply_common_filters,
+    parse_analytics_filters,
+    serialize_analytics_filters,
+)
 
 DEFAULT_TOP_N = 10
 MIN_TOP_N = 1
 MAX_TOP_N = 50
 
-VALID_STATES: tuple[str, ...] = ("all", "classified", "unclassified")
-
 Entry = tuple[Article, Classification | None]
-
-
-@dataclass(frozen=True)
-class AnalyticsFilters:
-    brand: str | None = None
-    publication: str | None = None
-    primary_topic: str | None = None
-    communication_category: str | None = None
-    sentiment: str | None = None
-    state: str = "all"
-
-
-def parse_analytics_filters(query_params) -> AnalyticsFilters:
-    """Parse filters from a Starlette QueryParams (or any dict-like) mapping.
-
-    Used identically by the UI route(s) and the internal API route(s) so
-    filter semantics can never diverge between surfaces.
-    """
-
-    def _clean(name: str) -> str | None:
-        value = query_params.get(name)
-        if value is None:
-            return None
-        value = value.strip()
-        return value or None
-
-    state = query_params.get("state") or "all"
-    if state not in VALID_STATES:
-        state = "all"
-
-    return AnalyticsFilters(
-        brand=_clean("brand"),
-        publication=_clean("publication"),
-        primary_topic=_clean("primary_topic"),
-        communication_category=_clean("communication_category"),
-        sentiment=_clean("sentiment"),
-        state=state,
-    )
 
 
 def clamp_top_n(value) -> int:
@@ -104,8 +101,7 @@ def _base_query(project_id: uuid.UUID, filters: AnalyticsFilters) -> Select:
         )
     )
 
-    if filters.brand:
-        stmt = stmt.where(Article.retailer == filters.brand)
+    stmt = apply_common_filters(stmt, filters)
     if filters.publication:
         stmt = stmt.where(Article.source == filters.publication)
     if filters.primary_topic:
@@ -125,6 +121,16 @@ def _base_query(project_id: uuid.UUID, filters: AnalyticsFilters) -> Select:
 def _fetch_entries(db: Session, project_id: uuid.UUID, filters: AnalyticsFilters) -> list[Entry]:
     rows = db.execute(_base_query(project_id, filters)).all()
     return [(row[0], row[1]) for row in rows]
+
+
+def _exclude_needs_review(entries: list[Entry]) -> list[Entry]:
+    """Every brand-keyed view calls this on its own input before grouping
+    by `article.retailer` — see the module docstring's needs-review
+    semantics. Never applied to project-level totals.
+    """
+    return [
+        entry for entry in entries if entry[0].retailer_review_status != RetailerReviewStatus.NEEDS_REVIEW
+    ]
 
 
 def _deduplicate_across_projects(entries: list[Entry]) -> tuple[list[Entry], int]:
@@ -157,13 +163,37 @@ def _available_filter_options(db: Session, project_ids: list[uuid.UUID]) -> dict
     """Always computed from the full unique-valid population across the
     given project(s), ignoring every currently-active filter, so selecting
     one filter never removes options from the other dropdowns.
+
+    `analytics_needs_review_count` reflects needs-review rows within the
+    unique-valid analytical population (`import_status == VALID AND
+    is_duplicate == False`) — NOT the full Review-tab backlog, which may
+    be larger whenever an invalid/duplicate row is also needs-review (see
+    `review.py::count_needs_review`, matched exactly by
+    `get_period_analytics`'s separate `review_backlog_count` KPI).
     """
     entries: list[Entry] = []
     for project_id in project_ids:
         entries.extend(_fetch_entries(db, project_id, AnalyticsFilters()))
 
+    # Never a selectable "brand" — needs-review rows have no confirmed
+    # canonical brand (see module docstring).
+    brand_eligible_entries = _exclude_needs_review(entries)
+    analytics_needs_review_count = len(entries) - len(brand_eligible_entries)
+
+    # One extra query, not per-entry — every file belonging to the
+    # project(s) is listed regardless of whether it currently has any
+    # unique-valid articles, including legacy files with no ImportBatch.
+    uploaded_files = (
+        db.execute(
+            select(UploadedFile.id, UploadedFile.original_filename)
+            .where(UploadedFile.project_id.in_(project_ids))
+            .order_by(UploadedFile.original_filename.asc())
+        )
+        .all()
+    )
+
     return {
-        "brands": sorted({article.retailer for article, _ in entries}),
+        "brands": sorted({article.retailer for article, _ in brand_eligible_entries}),
         "publications": sorted({article.source for article, _ in entries if article.source}),
         "primary_topics": sorted(
             {classification.primary_topic for _, classification in entries if classification}
@@ -178,7 +208,22 @@ def _available_filter_options(db: Session, project_ids: list[uuid.UUID]) -> dict
         "sentiments": sorted(
             {classification.sentiment for _, classification in entries if classification}
         ),
+        "source_files": [
+            {"id": row.id, "original_filename": row.original_filename} for row in uploaded_files
+        ],
+        "analytics_needs_review_count": analytics_needs_review_count,
     }
+
+
+def get_available_filter_options(db: Session, project_ids: list[uuid.UUID]) -> dict:
+    """Public accessor for `_available_filter_options` — used by
+    `comparison.py::_merge_filter_options` to recompute a correct,
+    non-double-counted `analytics_needs_review_count` over the unique
+    union of both comparison sides' project ids, rather than blindly
+    summing each side's independently-computed count (which double-counts
+    whenever the two sides share a project).
+    """
+    return _available_filter_options(db, project_ids)
 
 
 def _safe_avg(total: float, count: int) -> float | None:
@@ -213,6 +258,16 @@ def _compute_kpis(
         1 for _, c in classified_entries if c.confidence < LOW_CONFIDENCE_THRESHOLD
     )
     publications = {article.source for article, _ in entries if article.source}
+    # Needs-review rows are otherwise-valid imported coverage and stay
+    # counted in every total above them — this count exists purely to
+    # make the gap between "total" and "ranked by brand" explicit, never
+    # to imply they should be subtracted from unique_valid_articles.
+    # Scoped to the CURRENTLY FILTERED population (unlike
+    # `review_backlog_count`/`analytics_needs_review_count`, see
+    # `get_period_analytics`/`_available_filter_options`).
+    current_view_needs_review_count = sum(
+        1 for article, _ in entries if article.retailer_review_status == RetailerReviewStatus.NEEDS_REVIEW
+    )
 
     total_imported_rows = sum(p.total_rows for p in projects)
     valid_rows = sum(p.valid_rows for p in projects)
@@ -241,15 +296,20 @@ def _compute_kpis(
         "reach_missing_count": unique_valid - len(reach_values),
         "publication_count": len(publications),
         "low_confidence_count": low_confidence_count,
+        "current_view_needs_review_count": current_view_needs_review_count,
     }
 
 
 def _compute_brand_performance(entries: list[Entry], top_n: int) -> dict:
-    total_unique = len(entries)
-    total_reach = sum(_reach_values(entries))
+    # Needs-review rows have no confirmed canonical brand — never ranked,
+    # never counted toward any brand's SOV/reach-share denominator (see
+    # module docstring). They remain fully counted in `_compute_kpis`.
+    brand_eligible = _exclude_needs_review(entries)
+    total_unique = len(brand_eligible)
+    total_reach = sum(_reach_values(brand_eligible))
 
     by_brand: dict[str, list[Entry]] = defaultdict(list)
-    for article, classification in entries:
+    for article, classification in brand_eligible:
         by_brand[article.retailer].append((article, classification))
 
     brand_rows = []
@@ -311,9 +371,10 @@ def _distribution(entries: list[Entry], key_fn, total: int) -> list[dict]:
 
 
 def _topic_mix_by_brand(classified_entries: list[Entry]) -> list[dict]:
+    # Brand-keyed — needs-review rows excluded (see module docstring).
     matrix: dict[str, Counter] = defaultdict(Counter)
     brand_totals: dict[str, int] = defaultdict(int)
-    for article, classification in classified_entries:
+    for article, classification in _exclude_needs_review(classified_entries):
         matrix[article.retailer][classification.primary_topic] += 1
         brand_totals[article.retailer] += 1
 
@@ -370,9 +431,12 @@ def _compute_sentiment_analytics(entries: list[Entry], top_n: int) -> dict:
 
     overall = _distribution(classified_entries, lambda e: e[1].sentiment, total_classified)
 
+    # Brand-keyed — needs-review rows excluded (see module docstring);
+    # `overall` above intentionally stays computed over every classified
+    # entry, needs-review included, since it's not brand-keyed.
     by_brand: dict[str, Counter] = defaultdict(Counter)
     brand_totals: dict[str, int] = defaultdict(int)
-    for article, classification in classified_entries:
+    for article, classification in _exclude_needs_review(classified_entries):
         by_brand[article.retailer][classification.sentiment] += 1
         brand_totals[article.retailer] += 1
 
@@ -524,6 +588,23 @@ def _compute_publications_and_stories(entries: list[Entry], top_n: int) -> dict:
     }
 
 
+def _review_backlog_count(db: Session, project_ids: list[uuid.UUID]) -> int:
+    """Every `retailer_review_status == 'needs_review'` row for the given
+    project(s), with NO other restriction — matches
+    `app.services.review.count_needs_review` exactly (confirmed by direct
+    read of that module: it filters only on `project_id` and
+    `retailer_review_status`, never `import_status`/`is_duplicate`). This
+    is the true Review-tab backlog, a superset of
+    `available_filter_options["analytics_needs_review_count"]` whenever an
+    invalid/duplicate row is also needs-review.
+    """
+    stmt = select(func.count(Article.id)).where(
+        Article.project_id.in_(project_ids),
+        Article.retailer_review_status == RetailerReviewStatus.NEEDS_REVIEW,
+    )
+    return db.execute(stmt).scalar_one()
+
+
 def get_period_analytics(
     db: Session,
     projects: list[Project],
@@ -553,19 +634,32 @@ def get_period_analytics(
     else:
         entries, cross_project_duplicates_excluded = all_entries, 0
 
+    project_ids = [p.id for p in projects]
+    kpis = _compute_kpis(projects, entries, cross_project_duplicates_excluded)
+    # The true Review-tab backlog (matches `review.py::count_needs_review`
+    # exactly — no import_status/is_duplicate restriction), distinct from
+    # `current_view_needs_review_count` above (scoped to the currently
+    # filtered unique-valid population) and from
+    # `available_filter_options["analytics_needs_review_count"]` (scoped
+    # to the full unique-valid population, ignoring active filters).
+    kpis["review_backlog_count"] = _review_backlog_count(db, project_ids)
+
     return {
-        "project_ids": [p.id for p in projects],
+        "project_ids": project_ids,
         "filters": {
             "brand": filters.brand,
+            "brands": list(filters.brands),
+            "uploaded_file_ids": [str(u) for u in filters.uploaded_file_ids],
+            "include_needs_review": filters.include_needs_review,
             "publication": filters.publication,
             "primary_topic": filters.primary_topic,
             "communication_category": filters.communication_category,
             "sentiment": filters.sentiment,
             "state": filters.state,
         },
-        "available_filter_options": _available_filter_options(db, [p.id for p in projects]),
+        "available_filter_options": _available_filter_options(db, project_ids),
         "top_n": top_n,
-        "kpis": _compute_kpis(projects, entries, cross_project_duplicates_excluded),
+        "kpis": kpis,
         "brands": _compute_brand_performance(entries, top_n),
         "topics": _compute_topic_analytics(entries, top_n),
         "sentiment": _compute_sentiment_analytics(entries, top_n),

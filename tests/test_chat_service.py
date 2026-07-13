@@ -445,3 +445,144 @@ def test_conversation_history_includes_prior_valid_turn(
     history = run2.planning_payload_snapshot["conversation_history"]
     assert {"role": "user", "content": "Prima intrebare?"} in history
     assert any(h["role"] == "assistant" for h in history)
+
+
+# --- Phase D corrections: crash fix, read compatibility, legacy fallback ----
+
+
+def test_compute_scope_key_does_not_crash_with_uploaded_file_ids(project_factory):
+    """`compute_scope_key` used to call raw `dataclasses.asdict(filters)`,
+    which does not stringify `uuid.UUID` -- any request with a non-empty
+    `uploaded_file_ids` crashed. Must now use the canonical serializer.
+    """
+    import uuid
+
+    project = project_factory()
+    filters = AnalyticsFilters(uploaded_file_ids=(uuid.uuid4(),))
+    key = compute_scope_key("project", project.id, None, None, filters, "ro")
+    assert isinstance(key, str) and key
+
+
+def test_find_or_create_project_session_does_not_crash_with_uploaded_file_ids(
+    db_session, project_factory
+):
+    import uuid
+
+    project = project_factory()
+    filters = AnalyticsFilters(uploaded_file_ids=(uuid.uuid4(),))
+    session = find_or_create_project_session(db_session, project, filters)
+    assert session.filters == {"source_files": [str(u) for u in filters.uploaded_file_ids]}
+
+
+def test_build_scope_context_round_trips_new_shaped_stored_json(db_session, project_factory):
+    import uuid
+
+    from app.services.chat_tools import build_scope_context
+
+    project = project_factory()
+    file_id = uuid.uuid4()
+    filters = AnalyticsFilters(brands=("Auchan",), uploaded_file_ids=(file_id,), include_needs_review=True)
+    session = find_or_create_project_session(db_session, project, filters)
+
+    scope = build_scope_context(db_session, session)
+    assert scope.filters.brands == ("Auchan",)
+    assert scope.filters.uploaded_file_ids == (file_id,)
+    assert scope.filters.include_needs_review is True
+
+
+def test_build_scope_context_round_trips_old_phase_c_shaped_stored_json(db_session, project_factory):
+    """A ChatSession created before this correction stored the Phase C
+    six-field shape directly (via asdict) -- must still read back
+    correctly through the now-canonical parser.
+    """
+    from app.models.chat import ChatSession
+    from app.services.chat_tools import build_scope_context
+
+    project = project_factory()
+    old_shaped_filters = {
+        "brand": "Auchan", "publication": None, "primary_topic": None,
+        "communication_category": None, "sentiment": None, "state": "all",
+    }
+    session = ChatSession(
+        project_id=project.id,
+        filters=old_shaped_filters,
+        language="ro",
+        scope_key="legacy-shape-probe-key",
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    scope = build_scope_context(db_session, session)
+    assert scope.filters.brand == "Auchan"
+    assert scope.filters.brands == ("Auchan",)
+    assert scope.filters.uploaded_file_ids == ()
+
+
+def test_build_scope_context_round_trips_interim_phase_d_shaped_stored_json(
+    db_session, project_factory
+):
+    """A ChatSession written by the current, not-yet-corrected Phase D code
+    (pre this fix) used the interim key names `uploaded_file_ids`/
+    `include_needs_review` -- must still read back correctly.
+    """
+    import uuid
+
+    from app.models.chat import ChatSession
+    from app.services.chat_tools import build_scope_context
+
+    project = project_factory()
+    file_id = uuid.uuid4()
+    interim_shaped_filters = {
+        "brand": None, "brands": ["Auchan"], "uploaded_file_ids": [str(file_id)],
+        "include_needs_review": True, "publication": None, "primary_topic": None,
+        "communication_category": None, "sentiment": None, "state": "all",
+    }
+    session = ChatSession(
+        project_id=project.id,
+        filters=interim_shaped_filters,
+        language="ro",
+        scope_key="interim-shape-probe-key",
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    scope = build_scope_context(db_session, session)
+    assert scope.filters.brands == ("Auchan",)
+    assert scope.filters.uploaded_file_ids == (file_id,)
+    assert scope.filters.include_needs_review is True
+
+
+def test_legacy_phase_c_scope_key_is_still_reused(db_session, project_factory):
+    """A ChatSession created before this correction, whose scope_key was
+    computed from the exact historical Phase C payload shape, must still
+    be found and reused by a new request for the logically-equivalent
+    filters -- not silently duplicated into a second session.
+    """
+    from app.models.chat import ChatSession
+    from app.services.json_safe import hash_json
+
+    project = project_factory()
+    legacy_filters_payload = {
+        "brand": "Auchan", "publication": None, "primary_topic": None,
+        "communication_category": None, "sentiment": None, "state": "all",
+    }
+    legacy_payload = {
+        "kind": "project",
+        "project_id": str(project.id),
+        "baseline_project_ids": None,
+        "comparison_project_ids": None,
+        "filters": legacy_filters_payload,
+        "language": "ro",
+    }
+    legacy_scope_key = hash_json(legacy_payload)
+    old_session = ChatSession(
+        project_id=project.id,
+        filters=legacy_filters_payload,
+        language="ro",
+        scope_key=legacy_scope_key,
+    )
+    db_session.add(old_session)
+    db_session.commit()
+
+    found = find_or_create_project_session(db_session, project, AnalyticsFilters(brand="Auchan"))
+    assert found.id == old_session.id

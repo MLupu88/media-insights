@@ -5,11 +5,19 @@ from pydantic import BaseModel
 
 class AnalyticsFiltersOut(BaseModel):
     brand: str | None
+    brands: list[str]
+    uploaded_file_ids: list[str]
+    include_needs_review: bool
     publication: str | None
     primary_topic: str | None
     communication_category: str | None
     sentiment: str | None
     state: str
+
+
+class SourceFileOption(BaseModel):
+    id: uuid.UUID
+    original_filename: str
 
 
 class AvailableFilterOptions(BaseModel):
@@ -18,6 +26,8 @@ class AvailableFilterOptions(BaseModel):
     primary_topics: list[str]
     communication_categories: list[str]
     sentiments: list[str]
+    source_files: list[SourceFileOption]
+    analytics_needs_review_count: int
 
 
 class KpiSummary(BaseModel):
@@ -36,6 +46,8 @@ class KpiSummary(BaseModel):
     reach_missing_count: int
     publication_count: int
     low_confidence_count: int
+    current_view_needs_review_count: int
+    review_backlog_count: int
 
 
 class BrandRow(BaseModel):

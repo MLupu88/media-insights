@@ -9,7 +9,8 @@ from app.database import get_db
 from app.models.chat import ChatRun, ChatRunStatus, ChatSession
 from app.models.project import Project
 from app.security.auth import require_web_session
-from app.services.analytics import parse_analytics_filters
+from app.services.analytics import AnalyticsFilterError, parse_analytics_filters
+from app.services.analytics_filters import extract_prefixed_filter_params
 from app.services.chat_service import (
     ChatServiceError,
     create_run,
@@ -92,11 +93,19 @@ def ask_comparison_chat(
     comparison_project_ids: list[uuid.UUID] = Form(...),
     question: str = Form(...),
 ):
-    filters = parse_analytics_filters(request.query_params)
+    try:
+        filters = parse_analytics_filters(request.query_params)
+        baseline_params = extract_prefixed_filter_params(request.query_params, "baseline_filter_")
+        comparison_params = extract_prefixed_filter_params(request.query_params, "comparison_filter_")
+        baseline_filters = parse_analytics_filters(baseline_params) if baseline_params else None
+        comparison_filters = parse_analytics_filters(comparison_params) if comparison_params else None
+    except AnalyticsFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
 
     try:
         session = find_or_create_comparison_session(
-            db, baseline_project_ids, comparison_project_ids, filters
+            db, baseline_project_ids, comparison_project_ids,
+            filters=baseline_filters or filters, comparison_filters=comparison_filters,
         )
         run = create_run(db, session, question)
     except ChatServiceError as exc:

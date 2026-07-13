@@ -291,3 +291,91 @@ def test_comparison_article_detail_labeled_by_period(report_db, project_factory,
     data = build_comparison_report_data(report_db, [a.id], [b.id], AnalyticsFilters())
     periods = {row.period for row in data.article_detail}
     assert periods == {"Baseline", "Comparison"}
+
+
+# --- Phase D: Article Detail must match the KPI-sheet filtered population ---
+
+
+def test_article_detail_matches_multi_brand_filter(report_db, project_factory, article_factory):
+    project = project_factory()
+    article_factory(project, count=2, retailer="Auchan")
+    article_factory(project, count=1, retailer="Carrefour")
+    article_factory(project, count=1, retailer="Lidl")
+    filters = AnalyticsFilters(brands=("Auchan", "Carrefour"))
+
+    data = build_project_report_data(report_db, project.id, filters)
+
+    assert {row.article_id for row in data.article_detail} == {
+        a.id for a in project.articles if a.retailer in ("Auchan", "Carrefour")
+    }
+    assert len(data.article_detail) == data.analytics["kpis"]["unique_valid_articles"] == 3
+
+
+def test_article_detail_matches_source_file_filter(
+    report_db, project_factory, article_factory, uploaded_file_factory
+):
+    project = project_factory()
+    file_a = uploaded_file_factory(project)
+    file_b = uploaded_file_factory(project)
+    article_factory(project, count=2, retailer="Auchan", uploaded_file_id=file_a.id)
+    article_factory(project, count=1, retailer="Auchan", uploaded_file_id=file_b.id)
+    filters = AnalyticsFilters(uploaded_file_ids=(file_a.id,))
+
+    data = build_project_report_data(report_db, project.id, filters)
+
+    assert {row.article_id for row in data.article_detail} == {
+        a.id for a in project.articles if a.uploaded_file_id == file_a.id
+    }
+    assert len(data.article_detail) == data.analytics["kpis"]["unique_valid_articles"] == 2
+
+
+def test_article_detail_matches_needs_review_only_filter(
+    report_db, project_factory, article_factory
+):
+    from app.models.article import RetailerReviewStatus
+
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    article_factory(
+        project, count=2, retailer="unknown",
+        retailer_review_status=RetailerReviewStatus.NEEDS_REVIEW,
+    )
+    filters = AnalyticsFilters(include_needs_review=True)
+
+    data = build_project_report_data(report_db, project.id, filters)
+
+    assert {row.article_id for row in data.article_detail} == {
+        a.id for a in project.articles
+        if a.retailer_review_status == RetailerReviewStatus.NEEDS_REVIEW
+    }
+    assert len(data.article_detail) == data.analytics["kpis"]["unique_valid_articles"] == 2
+
+
+def test_article_detail_matches_combined_filters(
+    report_db, project_factory, article_factory, uploaded_file_factory
+):
+    from app.models.article import RetailerReviewStatus
+
+    project = project_factory()
+    file_a = uploaded_file_factory(project)
+    file_b = uploaded_file_factory(project)
+    article_factory(project, count=1, retailer="Auchan", uploaded_file_id=file_a.id)
+    article_factory(project, count=1, retailer="Carrefour", uploaded_file_id=file_a.id)
+    article_factory(project, count=1, retailer="Auchan", uploaded_file_id=file_b.id)
+    article_factory(
+        project, count=1, retailer="unknown", uploaded_file_id=file_a.id,
+        retailer_review_status=RetailerReviewStatus.NEEDS_REVIEW,
+    )
+    filters = AnalyticsFilters(
+        brands=("Auchan",), uploaded_file_ids=(file_a.id,), include_needs_review=True
+    )
+
+    data = build_project_report_data(report_db, project.id, filters)
+
+    expected_ids = {
+        a.id for a in project.articles
+        if a.uploaded_file_id == file_a.id
+        and (a.retailer == "Auchan" or a.retailer_review_status == RetailerReviewStatus.NEEDS_REVIEW)
+    }
+    assert {row.article_id for row in data.article_detail} == expected_ids
+    assert len(data.article_detail) == data.analytics["kpis"]["unique_valid_articles"] == expected_ids.__len__()

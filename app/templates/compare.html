@@ -12,9 +12,10 @@
   <div class="mt-4 border-b border-line pb-8">
     <h1 class="font-display text-4xl font-semibold text-ink">Compare projects</h1>
     <p class="mt-2 max-w-xl text-sm text-ink/60">
-      Pick the project(s) for each side. Selecting two quarters of the same year (Q1+Q2, Q3+Q4)
-      or all four forms an automatic H1 / H2 / full-year view — combined articles are
-      deduplicated across projects so nothing is double-counted.
+      Pick the project(s) for each side — the same project may be selected on both sides to
+      compare brands against each other within one reporting scope. Selecting two quarters of
+      the same year (Q1+Q2, Q3+Q4) or all four forms an automatic H1 / H2 / full-year view —
+      combined articles are deduplicated across projects so nothing is double-counted.
     </p>
   </div>
 
@@ -24,11 +25,11 @@
     </div>
   {% endif %}
 
-  {% if projects | length < 2 %}
+  {% if projects | length < 1 %}
     <div class="mt-8">
       {{ empty_state(
-        "Not enough projects to compare",
-        "Create at least two analysis projects to compare periods against each other."
+        "No projects to compare",
+        "Create at least one analysis project — the same project can be used on both sides to compare brands within it."
       ) }}
     </div>
   {% else %}
@@ -43,7 +44,7 @@
               </option>
             {% endfor %}
           </select>
-          <p class="mt-1 text-xs text-ink/50">Cmd/Ctrl-click to select more than one quarter.</p>
+          <p class="mt-1 text-xs text-ink/50">Cmd/Ctrl-click to select more than one quarter. May match the comparison side.</p>
         </div>
         <div>
           <label class="msl-label" for="comparison_project_ids">Comparison period</label>
@@ -54,27 +55,66 @@
               </option>
             {% endfor %}
           </select>
-          <p class="mt-1 text-xs text-ink/50">Cmd/Ctrl-click to select more than one quarter.</p>
+          <p class="mt-1 text-xs text-ink/50">Cmd/Ctrl-click to select more than one quarter. May match the baseline side.</p>
         </div>
       </div>
 
       {% set opts = comparison_result.available_filter_options if comparison_result else None %}
-      <div class="mt-6 flex flex-wrap items-end gap-4">
-        <div>
-          <label class="msl-label" for="brand">Brand</label>
-          <select id="brand" name="brand" class="msl-input">
-            <option value="">All brands</option>
+      {% set baseline_af = comparison_result.baseline.filters if comparison_result else None %}
+      {% set comparison_af = comparison_result.comparison.filters if comparison_result else None %}
+
+      <div class="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
+        <div class="border border-line p-4">
+          <p class="msl-label">Baseline brand(s)</p>
+          <div class="mt-1 max-h-36 space-y-1 overflow-y-auto pr-2 text-sm">
             {% if opts %}{% for brand in opts.brands %}
-              <option value="{{ brand }}" {% if comparison_result.baseline.filters.brand == brand %}selected{% endif %}>{{ brand }}</option>
+              <label class="flex items-center gap-2">
+                <input type="checkbox" name="baseline_filter_brand" value="{{ brand }}" {% if baseline_af and brand in baseline_af.brands %}checked{% endif %} class="h-4 w-4 shrink-0" />
+                <span class="truncate">{{ brand }}</span>
+              </label>
+            {% endfor %}{% else %}<p class="text-ink/40">Run a comparison to see brand options.</p>{% endif %}
+          </div>
+          <p class="mt-2 msl-label">Baseline source file(s)</p>
+          <div class="mt-1 max-h-36 space-y-1 overflow-y-auto pr-2 text-sm">
+            {% if opts %}{% for file in opts.source_files %}
+              <label class="flex items-center gap-2">
+                <input type="checkbox" name="baseline_filter_source_file" value="{{ file.id }}" {% if baseline_af and file.id | string in baseline_af.uploaded_file_ids %}checked{% endif %} class="h-4 w-4 shrink-0" />
+                <span class="truncate" title="{{ file.original_filename }}">{{ file.original_filename }}</span>
+              </label>
             {% endfor %}{% endif %}
-          </select>
+          </div>
+          <p class="mt-1 text-xs text-ink/40">Leave unchecked for all brands/files on this side.</p>
         </div>
+        <div class="border border-line p-4">
+          <p class="msl-label">Comparison brand(s)</p>
+          <div class="mt-1 max-h-36 space-y-1 overflow-y-auto pr-2 text-sm">
+            {% if opts %}{% for brand in opts.brands %}
+              <label class="flex items-center gap-2">
+                <input type="checkbox" name="comparison_filter_brand" value="{{ brand }}" {% if comparison_af and brand in comparison_af.brands %}checked{% endif %} class="h-4 w-4 shrink-0" />
+                <span class="truncate">{{ brand }}</span>
+              </label>
+            {% endfor %}{% else %}<p class="text-ink/40">Run a comparison to see brand options.</p>{% endif %}
+          </div>
+          <p class="mt-2 msl-label">Comparison source file(s)</p>
+          <div class="mt-1 max-h-36 space-y-1 overflow-y-auto pr-2 text-sm">
+            {% if opts %}{% for file in opts.source_files %}
+              <label class="flex items-center gap-2">
+                <input type="checkbox" name="comparison_filter_source_file" value="{{ file.id }}" {% if comparison_af and file.id | string in comparison_af.uploaded_file_ids %}checked{% endif %} class="h-4 w-4 shrink-0" />
+                <span class="truncate" title="{{ file.original_filename }}">{{ file.original_filename }}</span>
+              </label>
+            {% endfor %}{% endif %}
+          </div>
+          <p class="mt-1 text-xs text-ink/40">Leave unchecked for all brands/files on this side.</p>
+        </div>
+      </div>
+
+      <div class="mt-6 flex flex-wrap items-end gap-4">
         <div>
           <label class="msl-label" for="publication">Publication</label>
           <select id="publication" name="publication" class="msl-input">
             <option value="">All publications</option>
             {% if opts %}{% for pub in opts.publications %}
-              <option value="{{ pub }}" {% if comparison_result.baseline.filters.publication == pub %}selected{% endif %}>{{ pub }}</option>
+              <option value="{{ pub }}" {% if baseline_af and baseline_af.publication == pub %}selected{% endif %}>{{ pub }}</option>
             {% endfor %}{% endif %}
           </select>
         </div>
@@ -83,7 +123,7 @@
           <select id="primary_topic" name="primary_topic" class="msl-input">
             <option value="">All topics</option>
             {% if opts %}{% for topic in opts.primary_topics %}
-              <option value="{{ topic }}" {% if comparison_result.baseline.filters.primary_topic == topic %}selected{% endif %}>{{ topic }}</option>
+              <option value="{{ topic }}" {% if baseline_af and baseline_af.primary_topic == topic %}selected{% endif %}>{{ topic }}</option>
             {% endfor %}{% endif %}
           </select>
         </div>
@@ -92,7 +132,7 @@
           <select id="communication_category" name="communication_category" class="msl-input">
             <option value="">All categories</option>
             {% if opts %}{% for category in opts.communication_categories %}
-              <option value="{{ category }}" {% if comparison_result.baseline.filters.communication_category == category %}selected{% endif %}>{{ category }}</option>
+              <option value="{{ category }}" {% if baseline_af and baseline_af.communication_category == category %}selected{% endif %}>{{ category }}</option>
             {% endfor %}{% endif %}
           </select>
         </div>
@@ -101,22 +141,23 @@
           <select id="sentiment" name="sentiment" class="msl-input">
             <option value="">All sentiments</option>
             {% if opts %}{% for sentiment in opts.sentiments %}
-              <option value="{{ sentiment }}" {% if comparison_result.baseline.filters.sentiment == sentiment %}selected{% endif %}>{{ sentiment }}</option>
+              <option value="{{ sentiment }}" {% if baseline_af and baseline_af.sentiment == sentiment %}selected{% endif %}>{{ sentiment }}</option>
             {% endfor %}{% endif %}
           </select>
         </div>
         <div>
           <label class="msl-label" for="state">State</label>
           <select id="state" name="state" class="msl-input">
-            <option value="all" {% if not comparison_result or comparison_result.baseline.filters.state == "all" %}selected{% endif %}>All valid</option>
-            <option value="classified" {% if comparison_result and comparison_result.baseline.filters.state == "classified" %}selected{% endif %}>Classified only</option>
-            <option value="unclassified" {% if comparison_result and comparison_result.baseline.filters.state == "unclassified" %}selected{% endif %}>Unclassified only</option>
+            <option value="all" {% if not baseline_af or baseline_af.state == "all" %}selected{% endif %}>All valid</option>
+            <option value="classified" {% if baseline_af and baseline_af.state == "classified" %}selected{% endif %}>Classified only</option>
+            <option value="unclassified" {% if baseline_af and baseline_af.state == "unclassified" %}selected{% endif %}>Unclassified only</option>
           </select>
         </div>
         <button type="submit" class="bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent">
           Compare
         </button>
       </div>
+      <p class="mt-2 text-xs text-ink/40">Publication/topic/category/sentiment/state apply to both sides. Brand and source-file selections are independent per side.</p>
     </form>
 
     {% if comparison_result %}
@@ -131,7 +172,7 @@
           <span class="text-ink/30">vs</span>
           <span class="border border-line px-3 py-1.5 font-medium text-ink">{{ comparison.label }}</span>
         </div>
-        <form action="/compare/narratives/start" method="post">
+        <form action="/compare/narratives/start?{{ build_query_string(export_params) }}" method="post">
           {% for pid in baseline.project_ids %}
             <input type="hidden" name="baseline_project_ids" value="{{ pid }}" />
           {% endfor %}
@@ -144,16 +185,9 @@
         </form>
       </div>
 
-      {% set export_params = {
-        "baseline_project_ids": baseline.project_ids,
-        "comparison_project_ids": comparison.project_ids,
-        "brand": baseline.filters.brand,
-        "publication": baseline.filters.publication,
-        "primary_topic": baseline.filters.primary_topic,
-        "communication_category": baseline.filters.communication_category,
-        "sentiment": baseline.filters.sentiment,
-        "state": baseline.filters.state,
-      } %}
+      {# export_params is computed server-side from the same normalized
+         AnalyticsFilters object the comparison query used, via
+         serialize_analytics_filters -- never reconstructed here. #}
       <div class="mt-4 flex flex-wrap gap-4 text-sm">
         <a href="/compare/report.pptx?{{ build_query_string(export_params) }}" class="font-medium text-ink underline transition hover:text-accent">
           Export current view to PowerPoint
@@ -170,7 +204,7 @@
             View conversation ({{ chat_session.messages | length }} message(s)) →
           </a>
         {% else %}
-          <form action="/compare/chat/ask" method="post" class="flex gap-3">
+          <form action="/compare/chat/ask?{{ build_query_string(export_params) }}" method="post" class="flex gap-3">
             {% for pid in baseline.project_ids %}
               <input type="hidden" name="baseline_project_ids" value="{{ pid }}" />
             {% endfor %}

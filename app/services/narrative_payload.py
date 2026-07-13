@@ -29,7 +29,9 @@ from app.models.project import Project
 from app.services.analytics import (
     DEFAULT_TOP_N,
     AnalyticsFilters,
+    apply_common_filters,
     get_project_analytics,
+    serialize_analytics_filters,
 )
 from app.services.comparison import get_period_comparison
 from app.services.json_safe import hash_json, to_json_safe
@@ -53,8 +55,7 @@ def _evidence_base_query(project_ids: list[uuid.UUID], filters: AnalyticsFilters
         )
         .order_by(Article.id)
     )
-    if filters.brand:
-        stmt = stmt.where(Article.retailer == filters.brand)
+    stmt = apply_common_filters(stmt, filters)
     if filters.publication:
         stmt = stmt.where(Article.source == filters.publication)
     if filters.primary_topic:
@@ -140,17 +141,28 @@ def build_comparison_snapshot(
     comparison_project_ids: list[uuid.UUID],
     filters: AnalyticsFilters | None = None,
     top_n: int = DEFAULT_TOP_N,
+    baseline_filters: AnalyticsFilters | None = None,
+    comparison_filters: AnalyticsFilters | None = None,
 ) -> dict:
+    """`baseline_filters`/`comparison_filters` (Phase E) each default to
+    `filters` when omitted -- every existing call site unaffected. Each
+    side's evidence is sampled against its OWN filters, so a same-project
+    brand-vs-brand generation never cites an article outside the brand it
+    was actually attributed to.
+    """
     filters = filters or AnalyticsFilters()
+    effective_baseline_filters = baseline_filters or filters
+    effective_comparison_filters = comparison_filters or filters
     comparison = get_period_comparison(
-        db, baseline_project_ids, comparison_project_ids, filters, top_n=top_n
+        db, baseline_project_ids, comparison_project_ids, filters, top_n=top_n,
+        baseline_filters=effective_baseline_filters, comparison_filters=effective_comparison_filters,
     )
 
     baseline_pool = _sample_evidence_articles(
-        db, baseline_project_ids, filters, comparison["baseline"]
+        db, baseline_project_ids, effective_baseline_filters, comparison["baseline"]
     )
     comparison_pool = _sample_evidence_articles(
-        db, comparison_project_ids, filters, comparison["comparison"]
+        db, comparison_project_ids, effective_comparison_filters, comparison["comparison"]
     )
     seen_ids = {item["article_id"] for item in baseline_pool}
     evidence_pool = baseline_pool + [
@@ -163,17 +175,41 @@ def build_comparison_snapshot(
 
 
 def compute_input_hash(
-    snapshot: dict, language: str, narrative_types: list[str], prompt_contract_version: str
+    snapshot: dict,
+    language: str,
+    narrative_types: list[str],
+    prompt_contract_version: str,
+    filters: AnalyticsFilters,
+    comparison_filters: AnalyticsFilters | None = None,
 ) -> str:
     """SHA-256 of the exact persisted snapshot plus the request parameters
     that shape what was asked for. Identical inputs (same underlying data,
     same request) always hash identically, which is what drives the
     dedup/reuse rule in `app/services/narrative_service.py`.
+
+    `filter_identity` is an explicit, canonical identity for the filters
+    that produced `snapshot` -- not just an implicit echo via the
+    snapshot's own embedded analytics data. Without it, two different
+    filter sets that happen to produce identical analytics output (e.g.
+    two different single-source-file filters that each match zero
+    articles) would hash identically -- a latent collision, not just a
+    cosmetic gap.
+
+    `comparison_filters` (Phase E — same-project brand-vs-brand
+    comparison): when the baseline and comparison sides use genuinely
+    different filters, `filters` alone (the baseline side) is not enough
+    to distinguish e.g. an "Auchan vs Carrefour" generation from a "Lidl
+    vs Profi" one for the same project pair -- both must be folded into
+    the identity. Omitted (the default) for project-scoped generations,
+    which have only one filter set.
     """
     canonical_payload = {
         "snapshot": snapshot,
         "language": language,
         "narrative_types": sorted(narrative_types),
         "prompt_contract_version": prompt_contract_version,
+        "filter_identity": serialize_analytics_filters(filters),
     }
+    if comparison_filters is not None:
+        canonical_payload["comparison_filter_identity"] = serialize_analytics_filters(comparison_filters)
     return hash_json(canonical_payload)

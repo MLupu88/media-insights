@@ -7,7 +7,7 @@ from app.database import get_db
 from app.models.project import Project
 from app.schemas.analytics import ProjectAnalyticsResponse
 from app.security.auth import require_internal_secret
-from app.services.analytics import get_project_analytics, parse_analytics_filters
+from app.services.analytics import AnalyticsFilterError, get_project_analytics, parse_analytics_filters
 
 router = APIRouter(prefix="/api/internal", dependencies=[Depends(require_internal_secret)])
 
@@ -23,7 +23,10 @@ def project_analytics(
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
 
-    filters = parse_analytics_filters(request.query_params)
+    try:
+        filters = parse_analytics_filters(request.query_params)
+    except AnalyticsFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
     payload = get_project_analytics(db, project, filters, top_n=top_n)
 
     return ProjectAnalyticsResponse(**payload)

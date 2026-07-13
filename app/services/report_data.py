@@ -30,7 +30,12 @@ from app.models.article import Article, ImportStatus
 from app.models.classification import Classification
 from app.models.narrative import NarrativeInsight, NarrativeValidationStatus
 from app.models.project import Project
-from app.services.analytics import MAX_TOP_N, AnalyticsFilters, get_project_analytics
+from app.services.analytics import (
+    MAX_TOP_N,
+    AnalyticsFilters,
+    apply_common_filters,
+    get_project_analytics,
+)
 from app.services.chat_contract import CAUSAL_LANGUAGE_MARKERS
 from app.services.chat_tools import ChatScopeContext, find_latest_matching_generation
 from app.services.comparison import get_period_comparison
@@ -135,10 +140,19 @@ class ComparisonReportData:
     metadata: ReportMetadata
 
 
-def _describe_filters(filters: AnalyticsFilters) -> str:
+def _describe_filters(filters: AnalyticsFilters, source_files: list[dict] | None = None) -> str:
     parts: list[str] = []
-    if filters.brand:
-        parts.append(f"Brand: {filters.brand}")
+    if filters.brands:
+        parts.append(f"Brand: {', '.join(sorted(filters.brands))}")
+    if filters.include_needs_review:
+        parts.append("Needs review: included")
+    if filters.uploaded_file_ids:
+        selected_ids = {str(u) for u in filters.uploaded_file_ids}
+        names = [
+            f["original_filename"] for f in (source_files or []) if str(f["id"]) in selected_ids
+        ]
+        label = ", ".join(names) if names else f"{len(filters.uploaded_file_ids)} selected"
+        parts.append(f"Source file: {label}")
     if filters.publication:
         parts.append(f"Publication: {filters.publication}")
     if filters.primary_topic:
@@ -217,11 +231,15 @@ def _collect_insights(
 
 
 def _article_detail_query(project_ids: list[uuid.UUID], filters: AnalyticsFilters):
-    """Same filter-application shape as `analytics._base_query`/
-    `narrative_payload._evidence_base_query`/`chat_tools._articles_query`
-    — duplicated here rather than reached into, matching the established
-    precedent from both prior phases rather than introducing a new
-    cross-module reach-in.
+    """Base conditions (project scoping, import_status/is_duplicate) and
+    the domain-specific filters below (publication/topic/category/
+    sentiment/state) are this function's own responsibility, matching the
+    established per-caller pattern in `analytics._base_query`/
+    `narrative_payload._evidence_base_query`/`chat_tools._articles_query`.
+    The brand/needs-review/source-file predicates are NOT duplicated here
+    — they're delegated to the shared `apply_common_filters`, so this
+    export's Article Detail rows always match exactly what the KPI sheets
+    (which also go through `apply_common_filters`) already reflect.
     """
     stmt = (
         select(Article, Classification)
@@ -232,8 +250,7 @@ def _article_detail_query(project_ids: list[uuid.UUID], filters: AnalyticsFilter
             Article.is_duplicate.is_(False),
         )
     )
-    if filters.brand:
-        stmt = stmt.where(Article.retailer == filters.brand)
+    stmt = apply_common_filters(stmt, filters)
     if filters.publication:
         stmt = stmt.where(Article.source == filters.publication)
     if filters.primary_topic:
@@ -310,7 +327,7 @@ def build_project_report_data(
 
     metadata = ReportMetadata(
         scope_label=f"{project.name} ({project.quarter})",
-        filters_label=_describe_filters(filters),
+        filters_label=_describe_filters(filters, analytics["available_filter_options"]["source_files"]),
         generated_at=datetime.now(timezone.utc),
         population_definition=POPULATION_DEFINITION,
         chat_exclusion_note=CHAT_EXCLUSION_NOTE,
@@ -337,15 +354,27 @@ def build_comparison_report_data(
     baseline_project_ids: list[uuid.UUID],
     comparison_project_ids: list[uuid.UUID],
     filters: AnalyticsFilters | None = None,
+    baseline_filters: AnalyticsFilters | None = None,
+    comparison_filters: AnalyticsFilters | None = None,
 ) -> ComparisonReportData:
+    """`baseline_filters`/`comparison_filters` (Phase E — same-project
+    brand-vs-brand comparison) each default to `filters` when omitted, so
+    every existing call site is unaffected. Each side's Article Detail
+    rows are collected against its OWN filters — never a shared/blended
+    population — so a disjoint-brand comparison never double-lists an
+    article under both periods.
+    """
     filters = filters or AnalyticsFilters()
+    effective_baseline_filters = baseline_filters or filters
+    effective_comparison_filters = comparison_filters or filters
 
     db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
 
     # Raises ComparisonServiceError for a missing/empty selection — left to
     # propagate to the API layer, exactly like /api/internal/compare.
     comparison = get_period_comparison(
-        db, baseline_project_ids, comparison_project_ids, filters, top_n=MAX_TOP_N
+        db, baseline_project_ids, comparison_project_ids, filters, top_n=MAX_TOP_N,
+        baseline_filters=effective_baseline_filters, comparison_filters=effective_comparison_filters,
     )
 
     unique_baseline_ids = list(dict.fromkeys(baseline_project_ids))
@@ -363,17 +392,26 @@ def build_comparison_report_data(
     insights, insight_coverage = _collect_insights(db, scope)
 
     baseline_detail, baseline_total = _collect_article_detail(
-        db, unique_baseline_ids, filters, period="Baseline"
+        db, unique_baseline_ids, effective_baseline_filters, period="Baseline"
     )
     comparison_detail, comparison_total = _collect_article_detail(
-        db, unique_comparison_ids, filters, period="Comparison"
+        db, unique_comparison_ids, effective_comparison_filters, period="Comparison"
     )
     article_detail = baseline_detail + comparison_detail
     total_articles = baseline_total + comparison_total
 
+    if effective_baseline_filters == effective_comparison_filters:
+        filters_label = _describe_filters(filters, comparison["available_filter_options"]["source_files"])
+    else:
+        source_files = comparison["available_filter_options"]["source_files"]
+        filters_label = (
+            f"Baseline — {_describe_filters(effective_baseline_filters, source_files)}; "
+            f"Comparison — {_describe_filters(effective_comparison_filters, source_files)}"
+        )
+
     metadata = ReportMetadata(
         scope_label=f"{comparison['baseline']['label']} vs {comparison['comparison']['label']}",
-        filters_label=_describe_filters(filters),
+        filters_label=filters_label,
         generated_at=datetime.now(timezone.utc),
         population_definition=POPULATION_DEFINITION,
         chat_exclusion_note=CHAT_EXCLUSION_NOTE,

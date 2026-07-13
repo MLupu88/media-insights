@@ -10,7 +10,8 @@ from app.database import get_db
 from app.models.narrative import NarrativeGeneration, NarrativeGenerationStatus, NarrativeValidationStatus
 from app.models.project import Project
 from app.security.auth import require_web_session
-from app.services.analytics import parse_analytics_filters
+from app.services.analytics import AnalyticsFilterError, parse_analytics_filters
+from app.services.analytics_filters import extract_prefixed_filter_params
 from app.services.n8n import N8nTriggerError, trigger_narrative_generation
 from app.services.narrative_service import (
     NarrativeServiceError,
@@ -101,7 +102,14 @@ def start_comparison_narrative_generation(
     comparison_project_ids: list[uuid.UUID] = Form(...),
     force_regenerate: bool = Form(False),
 ):
-    filters = parse_analytics_filters(request.query_params)
+    try:
+        filters = parse_analytics_filters(request.query_params)
+        baseline_params = extract_prefixed_filter_params(request.query_params, "baseline_filter_")
+        comparison_params = extract_prefixed_filter_params(request.query_params, "comparison_filter_")
+        baseline_filters = parse_analytics_filters(baseline_params) if baseline_params else None
+        comparison_filters = parse_analytics_filters(comparison_params) if comparison_params else None
+    except AnalyticsFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
 
     try:
         generation, is_new = create_comparison_generation(
@@ -110,6 +118,8 @@ def start_comparison_narrative_generation(
             comparison_project_ids,
             filters,
             force_regenerate=force_regenerate,
+            baseline_filters=baseline_filters,
+            comparison_filters=comparison_filters,
         )
     except NarrativeServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

@@ -10,7 +10,6 @@ which `process_results` here validates and persists.
 """
 
 import uuid
-from dataclasses import asdict
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -24,7 +23,7 @@ from app.models.narrative import (
 )
 from app.models.project import Project
 from app.schemas.narrative import NarrativeResultsSubmission
-from app.services.analytics import DEFAULT_TOP_N, AnalyticsFilters
+from app.services.analytics import DEFAULT_TOP_N, AnalyticsFilters, serialize_analytics_filters
 from app.services.comparison import ComparisonServiceError
 from app.services.narrative_contract import (
     PAYLOAD_SCHEMA_VERSION,
@@ -45,10 +44,6 @@ class NarrativeServiceError(Exception):
         self.message = message
         self.status_code = status_code
         super().__init__(message)
-
-
-def _filters_to_dict(filters: AnalyticsFilters) -> dict:
-    return asdict(filters)
 
 
 def _find_reusable_generation(
@@ -94,7 +89,7 @@ def create_project_generation(
 
     snapshot = build_project_snapshot(db, project, filters, top_n=top_n)
     input_hash = compute_input_hash(
-        snapshot, language, requested_types, PROMPT_CONTRACT_VERSION
+        snapshot, language, requested_types, PROMPT_CONTRACT_VERSION, filters
     )
 
     prior = _find_reusable_generation(db, project.id, input_hash)
@@ -106,7 +101,7 @@ def create_project_generation(
         narrative_types=requested_types,
         baseline_project_ids=None,
         comparison_project_ids=None,
-        filters=_filters_to_dict(filters),
+        filters=serialize_analytics_filters(filters),
         source_snapshot=snapshot,
         language=language,
         status=NarrativeGenerationStatus.PENDING,
@@ -132,8 +127,15 @@ def create_comparison_generation(
     language: str = "ro",
     top_n: int = DEFAULT_TOP_N,
     force_regenerate: bool = False,
+    baseline_filters: AnalyticsFilters | None = None,
+    comparison_filters: AnalyticsFilters | None = None,
 ) -> tuple[NarrativeGeneration, bool]:
+    """`baseline_filters`/`comparison_filters` (Phase E) each default to
+    `filters` when omitted -- every existing call site unaffected.
+    """
     filters = filters or AnalyticsFilters()
+    effective_baseline_filters = baseline_filters or filters
+    effective_comparison_filters = comparison_filters or filters
     requested_types = list(narrative_types) if narrative_types else list(
         NarrativeTypes.COMPARISON_SCOPE_DEFAULTS
     )
@@ -154,13 +156,15 @@ def create_comparison_generation(
 
     try:
         snapshot = build_comparison_snapshot(
-            db, unique_baseline_ids, unique_comparison_ids, filters, top_n=top_n
+            db, unique_baseline_ids, unique_comparison_ids, filters, top_n=top_n,
+            baseline_filters=effective_baseline_filters, comparison_filters=effective_comparison_filters,
         )
     except ComparisonServiceError as exc:
         raise NarrativeServiceError(exc.message, exc.status_code) from exc
 
     input_hash = compute_input_hash(
-        snapshot, language, requested_types, PROMPT_CONTRACT_VERSION
+        snapshot, language, requested_types, PROMPT_CONTRACT_VERSION,
+        effective_baseline_filters, effective_comparison_filters,
     )
 
     # Ownership/navigation anchor only (see app/models/narrative.py) — never
@@ -172,12 +176,20 @@ def create_comparison_generation(
     if not force_regenerate and prior is not None:
         return prior, False
 
+    stored_filters = (
+        serialize_analytics_filters(filters)
+        if effective_baseline_filters == effective_comparison_filters
+        else {
+            "baseline": serialize_analytics_filters(effective_baseline_filters),
+            "comparison": serialize_analytics_filters(effective_comparison_filters),
+        }
+    )
     generation = NarrativeGeneration(
         project_id=anchor_project_id,
         narrative_types=requested_types,
         baseline_project_ids=[str(pid) for pid in unique_baseline_ids],
         comparison_project_ids=[str(pid) for pid in unique_comparison_ids],
-        filters=_filters_to_dict(filters),
+        filters=stored_filters,
         source_snapshot=snapshot,
         language=language,
         status=NarrativeGenerationStatus.PENDING,

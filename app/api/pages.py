@@ -1,3 +1,4 @@
+import dataclasses
 import uuid
 from urllib.parse import urlencode
 
@@ -11,7 +12,15 @@ from app.database import get_db
 from app.models.project import Project
 from app.schemas.project import ProjectCreate
 from app.security.auth import require_web_session
-from app.services.analytics import clamp_top_n, get_project_analytics, parse_analytics_filters
+from app.services.analytics import (
+    AnalyticsFilterError,
+    AnalyticsFilters,
+    clamp_top_n,
+    get_project_analytics,
+    parse_analytics_filters,
+    serialize_analytics_filters,
+)
+from app.services.analytics_filters import extract_prefixed_filter_params
 from app.services.chat_service import find_comparison_session, get_project_own_chat_session
 from app.services.classification import get_project_summary
 from app.services.comparison import ComparisonServiceError, get_period_comparison
@@ -47,6 +56,71 @@ def build_query_string(params: dict) -> str:
 templates.env.globals["build_query_string"] = build_query_string
 
 
+def _build_analytics_filter_chips(
+    request: Request, filters: AnalyticsFilters, source_files: list[dict], project_id
+) -> list[dict]:
+    """One removable "chip" per active analytics filter dimension —
+    "clear all" is just the existing bare `?tab=analytics` link (dropping
+    every query param at once); this covers "clear one filter," each chip
+    linking to the identical view with only its own dimension's query
+    param(s) removed, every other active filter (and `top_n`) untouched.
+    Every chip URL is a fully-qualified path (not just a `?query` relative
+    reference), so it's unambiguous regardless of caller/context.
+
+    Every clear_url is built purely from the normalized `AnalyticsFilters`
+    object via `serialize_analytics_filters(dataclasses.replace(filters, ...))`
+    — never from raw `request.query_params`, which could otherwise preserve
+    duplicate values, non-canonical ordering, legacy key aliases, or
+    unrelated malformed raw values. Only genuinely non-filter page params
+    (`tab`, `top_n`) are merged in separately.
+    """
+    top_n_param = request.query_params.get("top_n")
+
+    def _clear_url(**cleared_fields) -> str:
+        cleared = dataclasses.replace(filters, **cleared_fields)
+        params: dict = {**serialize_analytics_filters(cleared), "tab": "analytics"}
+        if top_n_param:
+            params["top_n"] = top_n_param
+        return f"/projects/{project_id}?" + build_query_string(params)
+
+    chips: list[dict] = []
+
+    if filters.brands:
+        chips.append(
+            {
+                "label": f"Brand: {', '.join(sorted(filters.brands))}",
+                "clear_url": _clear_url(brand=None, brands=()),
+            }
+        )
+
+    if filters.include_needs_review:
+        chips.append({"label": "Needs review", "clear_url": _clear_url(include_needs_review=False)})
+
+    if filters.uploaded_file_ids:
+        selected_ids = {str(u) for u in filters.uploaded_file_ids}
+        names = [f["original_filename"] for f in source_files if str(f["id"]) in selected_ids]
+        label = ", ".join(names) if names else f"{len(filters.uploaded_file_ids)} selected"
+        chips.append({"label": f"Source file: {label}", "clear_url": _clear_url(uploaded_file_ids=())})
+
+    if filters.publication:
+        chips.append({"label": f"Publication: {filters.publication}", "clear_url": _clear_url(publication=None)})
+    if filters.primary_topic:
+        chips.append({"label": f"Topic: {filters.primary_topic}", "clear_url": _clear_url(primary_topic=None)})
+    if filters.communication_category:
+        chips.append(
+            {
+                "label": f"Category: {filters.communication_category}",
+                "clear_url": _clear_url(communication_category=None),
+            }
+        )
+    if filters.sentiment:
+        chips.append({"label": f"Sentiment: {filters.sentiment}", "clear_url": _clear_url(sentiment=None)})
+    if filters.state != "all":
+        chips.append({"label": f"State: {filters.state}", "clear_url": _clear_url(state="all")})
+
+    return chips
+
+
 def render(request: Request, template_name: str, context: dict, status_code: int = 200):
     return templates.TemplateResponse(
         request,
@@ -66,6 +140,7 @@ def render_project_detail(
     narrative_message: dict | None = None,
     chat_message: dict | None = None,
     review_message: dict | None = None,
+    analytics_message: dict | None = None,
     status_code: int = 200,
 ):
     uploaded_files = list(
@@ -76,14 +151,32 @@ def render_project_detail(
 
     # Computed on every render (not just when the Review tab is active) so
     # the tab's badge count is always accurate regardless of which tab the
-    # page is currently showing.
-    needs_review_count = count_needs_review(db, project.id)
+    # page is currently showing. Matches `review_backlog_count` in
+    # `analytics.py::get_period_analytics` exactly -- the true Review-tab
+    # backlog, distinct from analytics' filtered-population needs-review
+    # counts (see analytics.py's module docstring).
+    review_backlog_count = count_needs_review(db, project.id)
 
     analytics_summary = None
+    analytics_filter_chips = None
+    export_params: dict = {}
     if active_tab == "analytics":
-        filters = parse_analytics_filters(request.query_params)
-        top_n = clamp_top_n(request.query_params.get("top_n"))
-        analytics_summary = get_project_analytics(db, project, filters, top_n=top_n)
+        try:
+            filters = parse_analytics_filters(request.query_params)
+        except AnalyticsFilterError as exc:
+            analytics_message = {"type": "error", "text": exc.message}
+            status_code = status.HTTP_400_BAD_REQUEST
+        else:
+            top_n = clamp_top_n(request.query_params.get("top_n"))
+            analytics_summary = get_project_analytics(db, project, filters, top_n=top_n)
+            analytics_filter_chips = _build_analytics_filter_chips(
+                request, filters, analytics_summary["available_filter_options"]["source_files"], project.id
+            )
+            # Built from the same normalized `filters` object the query
+            # itself used, never re-derived from the response dict — so
+            # export links always carry exactly the canonical shape
+            # `parse_analytics_filters` would read back.
+            export_params = serialize_analytics_filters(filters)
 
     narrative_generations = None
     if active_tab == "insights":
@@ -109,13 +202,16 @@ def render_project_detail(
             "classification_summary": classification_summary,
             "classification_message": classification_message,
             "analytics_summary": analytics_summary,
+            "analytics_filter_chips": analytics_filter_chips,
+            "analytics_message": analytics_message,
+            "export_params": export_params,
             "narrative_generations": narrative_generations,
             "narrative_message": narrative_message,
             "chat_session": chat_session,
             "chat_message": chat_message,
             "review_groups": review_groups,
             "review_message": review_message,
-            "needs_review_count": needs_review_count,
+            "review_backlog_count": review_backlog_count,
             "canonical_retailers": CANONICAL_RETAILERS,
         },
         status_code=status_code,
@@ -214,18 +310,53 @@ def compare_page(request: Request, db: Session = Depends(get_db)):
     comparison_result = None
     error_message = None
     chat_session = None
+    export_params: dict = {}
+    status_code = status.HTTP_200_OK
     if baseline_project_ids and comparison_project_ids:
-        filters = parse_analytics_filters(request.query_params)
-        top_n = clamp_top_n(request.query_params.get("top_n"))
+        # Phase E — same-project brand-vs-brand comparison: `baseline_filter_*`/
+        # `comparison_filter_*`-prefixed params parse into independent per-side
+        # filters; publication/primary_topic/communication_category/sentiment/
+        # state remain a single shared control (the unprefixed `filters`),
+        # applied to both sides -- matching the API/export routes exactly.
         try:
-            comparison_result = get_period_comparison(
-                db, baseline_project_ids, comparison_project_ids, filters, top_n=top_n
-            )
-        except ComparisonServiceError as exc:
+            filters = parse_analytics_filters(request.query_params)
+            baseline_params = extract_prefixed_filter_params(request.query_params, "baseline_filter_")
+            comparison_params = extract_prefixed_filter_params(request.query_params, "comparison_filter_")
+            baseline_filters = parse_analytics_filters(baseline_params) if baseline_params else None
+            comparison_filters = parse_analytics_filters(comparison_params) if comparison_params else None
+        except AnalyticsFilterError as exc:
             error_message = exc.message
-        chat_session = find_comparison_session(
-            db, baseline_project_ids, comparison_project_ids, filters
-        )
+            status_code = status.HTTP_400_BAD_REQUEST
+            filters = None
+        if filters is not None:
+            top_n = clamp_top_n(request.query_params.get("top_n"))
+            try:
+                comparison_result = get_period_comparison(
+                    db, baseline_project_ids, comparison_project_ids, filters, top_n=top_n,
+                    baseline_filters=baseline_filters, comparison_filters=comparison_filters,
+                )
+                export_params = {
+                    **serialize_analytics_filters(filters),
+                    "baseline_project_ids": [str(pid) for pid in baseline_project_ids],
+                    "comparison_project_ids": [str(pid) for pid in comparison_project_ids],
+                }
+                if baseline_filters is not None:
+                    export_params.update(
+                        {f"baseline_filter_{k}": v for k, v in serialize_analytics_filters(baseline_filters).items()}
+                    )
+                if comparison_filters is not None:
+                    export_params.update(
+                        {
+                            f"comparison_filter_{k}": v
+                            for k, v in serialize_analytics_filters(comparison_filters).items()
+                        }
+                    )
+            except ComparisonServiceError as exc:
+                error_message = exc.message
+            chat_session = find_comparison_session(
+                db, baseline_project_ids, comparison_project_ids,
+                filters=baseline_filters or filters, comparison_filters=comparison_filters,
+            )
 
     return render(
         request,
@@ -237,5 +368,7 @@ def compare_page(request: Request, db: Session = Depends(get_db)):
             "comparison_result": comparison_result,
             "chat_session": chat_session,
             "error_message": error_message,
+            "export_params": export_params,
         },
+        status_code=status_code,
     )

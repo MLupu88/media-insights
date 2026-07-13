@@ -26,6 +26,7 @@ from app.services.analytics import (
     MAX_TOP_N,
     MIN_TOP_N,
     AnalyticsFilters,
+    get_available_filter_options,
     get_period_analytics,
 )
 
@@ -88,6 +89,40 @@ def derive_period_label(projects: list[Project]) -> str:
 
     quarter_labels = ", ".join(sorted(f"{y}-Q{q}" for y, q in parsed))
     return f"{len(projects)} projects ({quarter_labels})"
+
+
+MAX_LABEL_BRANDS = 2
+
+
+def _label_for_filters(filters: AnalyticsFilters) -> str:
+    """Brand-list-aware label for one side of a same-project brand-vs-brand
+    comparison (Phase E), where `derive_period_label` would otherwise
+    collapse both sides to the same quarter label (e.g. "Q2 2026 vs Q2
+    2026", giving no hint a brand comparison happened).
+    """
+    if filters.brands:
+        sorted_brands = sorted(filters.brands)
+        if len(sorted_brands) <= MAX_LABEL_BRANDS:
+            return " + ".join(sorted_brands)
+        return f"{len(sorted_brands)} brands"
+    if filters.uploaded_file_ids:
+        return f"{len(filters.uploaded_file_ids)} source file(s)"
+    return "Selection"
+
+
+def _period_side_label(
+    projects: list[Project], other_projects: list[Project], filters: AnalyticsFilters, other_filters: AnalyticsFilters
+) -> str:
+    """Same-project-both-sides with genuinely different filters (Phase E
+    brand-vs-brand comparison): use a filter-derived label per side instead
+    of the identical quarter label both sides would otherwise share. Every
+    other case (disjoint projects, or same projects with identical
+    filters) is completely unchanged.
+    """
+    same_projects = {p.id for p in projects} == {p.id for p in other_projects}
+    if same_projects and filters != other_filters:
+        return _label_for_filters(filters)
+    return derive_period_label(projects)
 
 
 def _reslice_for_display(period: dict, top_n: int) -> dict:
@@ -314,13 +349,52 @@ def _volatility_from_rank_deltas(rank_deltas: list[dict]) -> dict:
     }
 
 
-def _merge_filter_options(baseline_options: dict, comparison_options: dict) -> dict:
+def _merge_filter_options(
+    db: Session,
+    baseline_options: dict,
+    comparison_options: dict,
+    unique_project_ids: list[uuid.UUID],
+) -> dict:
     """Union of both periods' available filter options, so the comparison
     filter dropdowns never hide a value that exists in only one side.
+
+    `_available_filter_options` (Phase D) also returns `source_files`
+    (a list of dicts, not a set-mergeable string list, already correctly
+    deduplicated by `id` — never by filename, so two different projects'
+    files sharing a name are never collapsed into one option) and
+    `analytics_needs_review_count` (a plain int) — each merged with its
+    own appropriate rule below, not the blind set-union the plain
+    string-list keys use.
+
+    `analytics_needs_review_count` is NOT a blind sum of the two sides'
+    independently-computed counts — that would double-count whenever
+    baseline and comparison share a project. It's recomputed directly
+    from the unique union of both sides' project ids.
     """
-    merged = {}
-    for key in baseline_options:
-        merged[key] = sorted(set(baseline_options[key]) | set(comparison_options[key]))
+    string_list_keys = (
+        "brands",
+        "publications",
+        "primary_topics",
+        "communication_categories",
+        "sentiments",
+    )
+    merged = {
+        key: sorted(set(baseline_options[key]) | set(comparison_options[key]))
+        for key in string_list_keys
+    }
+
+    seen_file_ids = set()
+    merged_files = []
+    for option in (*baseline_options["source_files"], *comparison_options["source_files"]):
+        if option["id"] not in seen_file_ids:
+            seen_file_ids.add(option["id"])
+            merged_files.append(option)
+    merged["source_files"] = sorted(merged_files, key=lambda f: f["original_filename"])
+
+    merged["analytics_needs_review_count"] = get_available_filter_options(db, unique_project_ids)[
+        "analytics_needs_review_count"
+    ]
+
     return merged
 
 
@@ -330,8 +404,21 @@ def get_period_comparison(
     comparison_project_ids: list[uuid.UUID],
     filters: AnalyticsFilters | None = None,
     top_n: int = DEFAULT_TOP_N,
+    baseline_filters: AnalyticsFilters | None = None,
+    comparison_filters: AnalyticsFilters | None = None,
 ) -> dict:
+    """`baseline_filters`/`comparison_filters` (Phase E — same-project
+    brand-vs-brand comparison) each default to `filters` when not supplied,
+    so every existing call site's behavior is completely unchanged when
+    they're omitted. When they differ and both sides are the same
+    project(s), each side's population and label are computed
+    independently against its own filters — never a shared/blended
+    population, and never double-counted (each side's `get_period_analytics`
+    call is fully independent).
+    """
     filters = filters or AnalyticsFilters()
+    effective_baseline_filters = baseline_filters or filters
+    effective_comparison_filters = comparison_filters or filters
     display_top_n = max(MIN_TOP_N, min(MAX_TOP_N, top_n))
 
     baseline_projects = _resolve_projects(db, baseline_project_ids, "Baseline")
@@ -339,8 +426,8 @@ def get_period_comparison(
 
     # Always compute rankings at the system cap so rank-change/entrant/
     # dropout math sees the full picture, never a display-truncated slice.
-    baseline_full = get_period_analytics(db, baseline_projects, filters, top_n=MAX_TOP_N)
-    comparison_full = get_period_analytics(db, comparison_projects, filters, top_n=MAX_TOP_N)
+    baseline_full = get_period_analytics(db, baseline_projects, effective_baseline_filters, top_n=MAX_TOP_N)
+    comparison_full = get_period_analytics(db, comparison_projects, effective_comparison_filters, top_n=MAX_TOP_N)
 
     publication_volume_deltas = _ranking_deltas(
         baseline_full["publications_and_stories"]["publications_by_volume"],
@@ -406,16 +493,23 @@ def get_period_comparison(
     return {
         "baseline": {
             **_reslice_for_display(baseline_full, display_top_n),
-            "label": derive_period_label(baseline_projects),
+            "label": _period_side_label(
+                baseline_projects, comparison_projects, effective_baseline_filters, effective_comparison_filters
+            ),
             "project_count": len(baseline_projects),
         },
         "comparison": {
             **_reslice_for_display(comparison_full, display_top_n),
-            "label": derive_period_label(comparison_projects),
+            "label": _period_side_label(
+                comparison_projects, baseline_projects, effective_comparison_filters, effective_baseline_filters
+            ),
             "project_count": len(comparison_projects),
         },
         "available_filter_options": _merge_filter_options(
-            baseline_full["available_filter_options"], comparison_full["available_filter_options"]
+            db,
+            baseline_full["available_filter_options"],
+            comparison_full["available_filter_options"],
+            list(dict.fromkeys([p.id for p in baseline_projects] + [p.id for p in comparison_projects])),
         ),
         "top_n": display_top_n,
         "deltas": deltas,

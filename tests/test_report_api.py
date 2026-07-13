@@ -103,6 +103,52 @@ def test_comparison_pptx_and_xlsx_success(authenticated_client, db_session, proj
     openpyxl.load_workbook(BytesIO(r2.content))
 
 
+# --- Phase E/F: same-project brand-vs-brand comparison export -------------------
+
+
+def test_same_project_brand_vs_brand_export_succeeds_and_is_consistent_with_api(
+    authenticated_client, internal_headers, db_session, project_factory, article_factory
+):
+    project = project_factory(name="Brand vs Brand")
+    article_factory(project, count=3, retailer="Auchan")
+    article_factory(project, count=2, retailer="Carrefour")
+    project.total_rows = 5
+    db_session.commit()
+
+    url = (
+        f"/compare/report.xlsx?baseline_project_ids={project.id}&comparison_project_ids={project.id}"
+        "&baseline_filter_brand=Auchan&comparison_filter_brand=Carrefour"
+    )
+    response = authenticated_client.get(url)
+    assert response.status_code == 200
+    wb = openpyxl.load_workbook(BytesIO(response.content))
+    ws = wb["KPI Comparison"]
+    row_values = {
+        ws.cell(row=r, column=1).value: (ws.cell(row=r, column=2).value, ws.cell(row=r, column=3).value)
+        for r in range(2, ws.max_row + 1)
+    }
+    baseline_value, comparison_value = row_values["Unique Valid Articles"]
+    assert baseline_value == 3
+    assert comparison_value == 2
+
+    pptx_url = url.replace("report.xlsx", "report.pptx")
+    pptx_response = authenticated_client.get(pptx_url)
+    assert pptx_response.status_code == 200
+    Presentation(BytesIO(pptx_response.content))
+
+    api_response = authenticated_client.get(
+        f"/api/internal/compare?baseline_project_ids={project.id}&comparison_project_ids={project.id}"
+        "&baseline_filter_brand=Auchan&comparison_filter_brand=Carrefour",
+        headers=internal_headers,
+    )
+    assert api_response.status_code == 200
+    api_body = api_response.json()
+    assert api_body["baseline"]["kpis"]["unique_valid_articles"] == baseline_value
+    assert api_body["comparison"]["kpis"]["unique_valid_articles"] == comparison_value
+    assert api_body["baseline"]["label"] == "Auchan"
+    assert api_body["comparison"]["label"] == "Carrefour"
+
+
 # --- filter propagation (core regression this revision guards) ------------------
 
 

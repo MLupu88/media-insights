@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.security.auth import require_web_session
-from app.services.analytics import parse_analytics_filters
+from app.services.analytics import AnalyticsFilterError, parse_analytics_filters
+from app.services.analytics_filters import extract_prefixed_filter_params
 from app.services.comparison import ComparisonServiceError
 from app.services.report_data import (
     ReportNotFoundError,
@@ -59,7 +60,10 @@ def _file_response(content: bytes, media_type: str, filename: str) -> Response:
 
 @router.get("/projects/{project_id}/report.pptx")
 def project_report_pptx(project_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
-    filters = parse_analytics_filters(request.query_params)
+    try:
+        filters = parse_analytics_filters(request.query_params)
+    except AnalyticsFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
     try:
         data = build_project_report_data(db, project_id, filters)
     except ReportNotFoundError as exc:
@@ -79,7 +83,10 @@ def project_report_pptx(project_id: uuid.UUID, request: Request, db: Session = D
 
 @router.get("/projects/{project_id}/report.xlsx")
 def project_report_xlsx(project_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
-    filters = parse_analytics_filters(request.query_params)
+    try:
+        filters = parse_analytics_filters(request.query_params)
+    except AnalyticsFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
     try:
         data = build_project_report_data(db, project_id, filters)
     except ReportNotFoundError as exc:
@@ -104,9 +111,19 @@ def comparison_report_pptx(
     baseline_project_ids: list[uuid.UUID] = Query(default_factory=list),
     comparison_project_ids: list[uuid.UUID] = Query(default_factory=list),
 ):
-    filters = parse_analytics_filters(request.query_params)
     try:
-        data = build_comparison_report_data(db, baseline_project_ids, comparison_project_ids, filters)
+        filters = parse_analytics_filters(request.query_params)
+        baseline_params = extract_prefixed_filter_params(request.query_params, "baseline_filter_")
+        comparison_params = extract_prefixed_filter_params(request.query_params, "comparison_filter_")
+        baseline_filters = parse_analytics_filters(baseline_params) if baseline_params else None
+        comparison_filters = parse_analytics_filters(comparison_params) if comparison_params else None
+    except AnalyticsFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+    try:
+        data = build_comparison_report_data(
+            db, baseline_project_ids, comparison_project_ids, filters,
+            baseline_filters=baseline_filters, comparison_filters=comparison_filters,
+        )
     except ComparisonServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
@@ -129,9 +146,19 @@ def comparison_report_xlsx(
     baseline_project_ids: list[uuid.UUID] = Query(default_factory=list),
     comparison_project_ids: list[uuid.UUID] = Query(default_factory=list),
 ):
-    filters = parse_analytics_filters(request.query_params)
     try:
-        data = build_comparison_report_data(db, baseline_project_ids, comparison_project_ids, filters)
+        filters = parse_analytics_filters(request.query_params)
+        baseline_params = extract_prefixed_filter_params(request.query_params, "baseline_filter_")
+        comparison_params = extract_prefixed_filter_params(request.query_params, "comparison_filter_")
+        baseline_filters = parse_analytics_filters(baseline_params) if baseline_params else None
+        comparison_filters = parse_analytics_filters(comparison_params) if comparison_params else None
+    except AnalyticsFilterError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.message) from exc
+    try:
+        data = build_comparison_report_data(
+            db, baseline_project_ids, comparison_project_ids, filters,
+            baseline_filters=baseline_filters, comparison_filters=comparison_filters,
+        )
     except ComparisonServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 

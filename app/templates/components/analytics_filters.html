@@ -1,16 +1,61 @@
 {% set af = analytics_summary.filters %}
 {% set opts = analytics_summary.available_filter_options %}
-<form method="get" action="/projects/{{ project.id }}" class="msl-panel flex flex-wrap items-end gap-4 p-4">
+
+{% if analytics_filter_chips %}
+  <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+    <span class="font-medium uppercase tracking-wide text-ink/50">Active filters:</span>
+    {% for chip in analytics_filter_chips %}
+      <a
+        href="{{ chip.clear_url }}"
+        class="inline-flex items-center gap-1.5 border border-line bg-white px-2.5 py-1 text-ink/70 transition hover:border-accent hover:text-accent"
+      >
+        {{ chip.label }}
+        <span aria-hidden="true">×</span>
+      </a>
+    {% endfor %}
+    <a href="/projects/{{ project.id }}?tab=analytics" class="text-ink/40 underline transition hover:text-accent">
+      Clear all
+    </a>
+  </div>
+{% endif %}
+
+<form method="get" action="/projects/{{ project.id }}" class="msl-panel flex flex-wrap items-start gap-6 p-4">
   <input type="hidden" name="tab" value="analytics" />
 
   <div>
-    <label class="msl-label" for="filter-brand">Brand</label>
-    <select id="filter-brand" name="brand" class="msl-input">
-      <option value="">All brands</option>
+    <p class="msl-label">Brand</p>
+    <div class="mt-1 max-h-40 w-48 space-y-1 overflow-y-auto pr-2 text-sm">
       {% for brand in opts.brands %}
-        <option value="{{ brand }}" {% if af.brand == brand %}selected{% endif %}>{{ brand }}</option>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" name="brand" value="{{ brand }}" {% if brand in af.brands %}checked{% endif %} class="h-4 w-4 shrink-0" />
+          <span class="truncate">{{ brand }}</span>
+        </label>
       {% endfor %}
-    </select>
+      {% if opts.analytics_needs_review_count %}
+        <label class="flex items-center gap-2 border-t border-line pt-1 text-ink/70">
+          <input type="checkbox" name="needs_review" value="1" {% if af.include_needs_review %}checked{% endif %} class="h-4 w-4 shrink-0" />
+          <span>Needs review ({{ opts.analytics_needs_review_count }})</span>
+        </label>
+      {% endif %}
+    </div>
+    <p class="mt-1 text-xs text-ink/40">Leave all unchecked for all brands.</p>
+  </div>
+
+  <div>
+    <p class="msl-label">Source file</p>
+    <div class="mt-1 max-h-40 w-48 space-y-1 overflow-y-auto pr-2 text-sm">
+      {% if opts.source_files %}
+        {% for file in opts.source_files %}
+          <label class="flex items-center gap-2">
+            <input type="checkbox" name="source_file" value="{{ file.id }}" {% if file.id | string in af.uploaded_file_ids %}checked{% endif %} class="h-4 w-4 shrink-0" />
+            <span class="truncate" title="{{ file.original_filename }}">{{ file.original_filename }}</span>
+          </label>
+        {% endfor %}
+      {% else %}
+        <p class="text-ink/40">No files yet.</p>
+      {% endif %}
+    </div>
+    <p class="mt-1 text-xs text-ink/40">Leave all unchecked for all files.</p>
   </div>
 
   <div>

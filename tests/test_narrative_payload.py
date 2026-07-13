@@ -80,8 +80,8 @@ def test_compute_input_hash_stable_for_identical_input(db_session, project_facto
     article_factory(project, count=1, retailer="Auchan")
     snapshot = build_project_snapshot(db_session, project, AnalyticsFilters())
 
-    hash_a = compute_input_hash(snapshot, "ro", ["executive_summary"], "narrative-v1")
-    hash_b = compute_input_hash(snapshot, "ro", ["executive_summary"], "narrative-v1")
+    hash_a = compute_input_hash(snapshot, "ro", ["executive_summary"], "narrative-v1", AnalyticsFilters())
+    hash_b = compute_input_hash(snapshot, "ro", ["executive_summary"], "narrative-v1", AnalyticsFilters())
     assert hash_a == hash_b
 
 
@@ -90,8 +90,8 @@ def test_compute_input_hash_changes_with_narrative_types(db_session, project_fac
     article_factory(project, count=1, retailer="Auchan")
     snapshot = build_project_snapshot(db_session, project, AnalyticsFilters())
 
-    hash_a = compute_input_hash(snapshot, "ro", ["executive_summary"], "narrative-v1")
-    hash_b = compute_input_hash(snapshot, "ro", ["key_findings"], "narrative-v1")
+    hash_a = compute_input_hash(snapshot, "ro", ["executive_summary"], "narrative-v1", AnalyticsFilters())
+    hash_b = compute_input_hash(snapshot, "ro", ["key_findings"], "narrative-v1", AnalyticsFilters())
     assert hash_a != hash_b
 
 
@@ -102,6 +102,108 @@ def test_compute_input_hash_is_narrative_type_order_independent(
     article_factory(project, count=1, retailer="Auchan")
     snapshot = build_project_snapshot(db_session, project, AnalyticsFilters())
 
-    hash_a = compute_input_hash(snapshot, "ro", ["executive_summary", "key_findings"], "narrative-v1")
-    hash_b = compute_input_hash(snapshot, "ro", ["key_findings", "executive_summary"], "narrative-v1")
+    hash_a = compute_input_hash(
+        snapshot, "ro", ["executive_summary", "key_findings"], "narrative-v1", AnalyticsFilters()
+    )
+    hash_b = compute_input_hash(
+        snapshot, "ro", ["key_findings", "executive_summary"], "narrative-v1", AnalyticsFilters()
+    )
     assert hash_a == hash_b
+
+
+# --- filter_identity: explicit canonical filter identity in the hash --------
+
+
+def test_compute_input_hash_singular_and_plural_one_brand_are_identical(
+    db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    snapshot = build_project_snapshot(db_session, project, AnalyticsFilters())
+
+    hash_a = compute_input_hash(
+        snapshot, "ro", ["executive_summary"], "narrative-v1", AnalyticsFilters(brand="Auchan")
+    )
+    hash_b = compute_input_hash(
+        snapshot, "ro", ["executive_summary"], "narrative-v1", AnalyticsFilters(brands=("Auchan",))
+    )
+    assert hash_a == hash_b
+
+
+def test_compute_input_hash_brand_order_does_not_matter(db_session, project_factory, article_factory):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    snapshot = build_project_snapshot(db_session, project, AnalyticsFilters())
+
+    hash_a = compute_input_hash(
+        snapshot, "ro", ["executive_summary"], "narrative-v1",
+        AnalyticsFilters(brands=("Carrefour", "Auchan")),
+    )
+    hash_b = compute_input_hash(
+        snapshot, "ro", ["executive_summary"], "narrative-v1",
+        AnalyticsFilters(brands=("Auchan", "Carrefour")),
+    )
+    assert hash_a == hash_b
+
+
+def test_compute_input_hash_source_file_order_does_not_matter(
+    db_session, project_factory, article_factory, uploaded_file_factory
+):
+    import uuid
+
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    snapshot = build_project_snapshot(db_session, project, AnalyticsFilters())
+    id_a, id_b = uuid.uuid4(), uuid.uuid4()
+
+    hash_a = compute_input_hash(
+        snapshot, "ro", ["executive_summary"], "narrative-v1",
+        AnalyticsFilters(uploaded_file_ids=(id_a, id_b)),
+    )
+    hash_b = compute_input_hash(
+        snapshot, "ro", ["executive_summary"], "narrative-v1",
+        AnalyticsFilters(uploaded_file_ids=(id_b, id_a)),
+    )
+    assert hash_a == hash_b
+
+
+def test_compute_input_hash_needs_review_toggle_changes_the_hash(
+    db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    snapshot = build_project_snapshot(db_session, project, AnalyticsFilters())
+
+    hash_a = compute_input_hash(
+        snapshot, "ro", ["executive_summary"], "narrative-v1",
+        AnalyticsFilters(include_needs_review=False),
+    )
+    hash_b = compute_input_hash(
+        snapshot, "ro", ["executive_summary"], "narrative-v1",
+        AnalyticsFilters(include_needs_review=True),
+    )
+    assert hash_a != hash_b
+
+
+def test_compute_input_hash_distinct_source_file_sets_never_collide(
+    db_session, project_factory, article_factory
+):
+    """Two different filter sets that happen to produce identical analytics
+    output (e.g. two different single-source-file filters that each match
+    zero articles) must still hash differently -- the whole point of an
+    explicit filter_identity rather than relying only on the snapshot's
+    own embedded data.
+    """
+    import uuid
+
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    id_a, id_b = uuid.uuid4(), uuid.uuid4()
+    filters_a = AnalyticsFilters(uploaded_file_ids=(id_a,))
+    filters_b = AnalyticsFilters(uploaded_file_ids=(id_b,))
+    snapshot_a = build_project_snapshot(db_session, project, filters_a)
+    snapshot_b = build_project_snapshot(db_session, project, filters_b)
+
+    hash_a = compute_input_hash(snapshot_a, "ro", ["executive_summary"], "narrative-v1", filters_a)
+    hash_b = compute_input_hash(snapshot_b, "ro", ["executive_summary"], "narrative-v1", filters_b)
+    assert hash_a != hash_b

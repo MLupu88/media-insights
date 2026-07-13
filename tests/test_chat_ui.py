@@ -163,7 +163,10 @@ def test_compare_page_shows_ask_form_when_no_session(
     )
     assert response.status_code == 200
     assert "Ask about this comparison" in response.text
-    assert 'action="/compare/chat/ask"' in response.text
+    # The form action carries the current filter state as a query string
+    # (Phase E — same-project brand-vs-brand comparison), so only the path
+    # prefix is asserted here, not the full literal attribute.
+    assert 'action="/compare/chat/ask?' in response.text
 
 
 def test_compare_page_shows_view_conversation_link_when_session_exists(

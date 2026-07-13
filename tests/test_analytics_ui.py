@@ -33,7 +33,7 @@ def test_analytics_tab_renders_filter_form_and_kpis(
     response = authenticated_client.get(f"/projects/{project.id}?tab=analytics")
 
     assert response.status_code == 200
-    assert 'id="filter-brand"' in response.text
+    assert 'name="brand"' in response.text  # checkbox multi-brand filter (Phase D)
     assert 'id="filter-sentiment"' in response.text
     assert "Unique valid articles" in response.text
     assert "Auchan" in response.text

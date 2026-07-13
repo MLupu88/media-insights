@@ -1,12 +1,24 @@
-def test_compare_page_empty_state_with_fewer_than_two_projects(
-    authenticated_client, project_factory
-):
+def test_compare_page_shows_pickers_with_only_one_project(authenticated_client, project_factory):
+    """A single project is enough to compare -- Phase E allows selecting
+    the same project on both sides for a same-project brand-vs-brand
+    comparison, so the "not enough projects" empty state no longer
+    applies until there are zero projects at all.
+    """
     project_factory(name="Only One", quarter="2026-Q1")
 
     response = authenticated_client.get("/compare")
 
     assert response.status_code == 200
-    assert "Not enough projects to compare" in response.text
+    assert "Not enough projects to compare" not in response.text
+    assert 'name="baseline_project_ids"' in response.text
+    assert 'name="comparison_project_ids"' in response.text
+
+
+def test_compare_page_empty_state_with_zero_projects(authenticated_client):
+    response = authenticated_client.get("/compare")
+
+    assert response.status_code == 200
+    assert "No projects to compare" in response.text
 
 
 def test_compare_page_shows_pickers_with_two_or_more_projects(
@@ -145,3 +157,111 @@ def test_compare_page_filter_options_stable_across_filtered_request(
     # Both publications must still be listed even though we filtered by brand.
     assert "Ziarul" in response.text
     assert "Adevarul" in response.text
+
+
+# ---------------------------------------------------------------------------
+# Phase E: same-project brand-vs-brand comparison, wired through the UI
+# ---------------------------------------------------------------------------
+
+
+def test_compare_page_accepts_same_project_on_both_sides(
+    authenticated_client, project_factory, article_factory
+):
+    project = project_factory(name="Same Project")
+    article_factory(project, count=3, retailer="Auchan")
+    article_factory(project, count=2, retailer="Carrefour")
+
+    response = authenticated_client.get(
+        f"/compare?baseline_project_ids={project.id}&comparison_project_ids={project.id}"
+        "&baseline_filter_brand=Auchan&comparison_filter_brand=Carrefour"
+    )
+
+    assert response.status_code == 200
+    assert "Auchan" in response.text
+    assert "Carrefour" in response.text
+    # Independent per-side KPI figures, not a shared/blended population.
+    assert "3" in response.text
+    assert "2" in response.text
+
+
+def test_compare_page_brand_checkboxes_are_independently_pre_checked_per_side(
+    authenticated_client, project_factory, article_factory
+):
+    project = project_factory(name="Checkbox Project")
+    article_factory(project, count=1, retailer="Auchan")
+    article_factory(project, count=1, retailer="Carrefour")
+
+    response = authenticated_client.get(
+        f"/compare?baseline_project_ids={project.id}&comparison_project_ids={project.id}"
+        "&baseline_filter_brand=Auchan&comparison_filter_brand=Carrefour"
+    )
+
+    assert response.status_code == 200
+    assert 'name="baseline_filter_brand" value="Auchan" checked' in response.text
+    assert 'name="comparison_filter_brand" value="Carrefour" checked' in response.text
+    # Each side's checkbox for the OTHER side's brand must not be checked.
+    assert 'name="baseline_filter_brand" value="Carrefour" checked' not in response.text
+    assert 'name="comparison_filter_brand" value="Auchan" checked' not in response.text
+
+
+def test_compare_page_labels_are_brand_based_for_same_project_comparison(
+    authenticated_client, project_factory, article_factory
+):
+    project = project_factory(name="Label Project", quarter="2026-Q2")
+    article_factory(project, count=1, retailer="Auchan")
+    article_factory(project, count=1, retailer="Carrefour")
+
+    response = authenticated_client.get(
+        f"/compare?baseline_project_ids={project.id}&comparison_project_ids={project.id}"
+        "&baseline_filter_brand=Auchan&comparison_filter_brand=Carrefour"
+    )
+
+    assert response.status_code == 200
+    # Brand-based labels, not the quarter-collision "Q2 2026 vs Q2 2026".
+    assert ">Auchan<" in response.text
+    assert ">Carrefour<" in response.text
+
+
+def test_compare_page_export_links_carry_independent_side_filters(
+    authenticated_client, project_factory, article_factory
+):
+    project = project_factory(name="Export Filter Project")
+    article_factory(project, count=1, retailer="Auchan")
+    article_factory(project, count=1, retailer="Carrefour")
+
+    response = authenticated_client.get(
+        f"/compare?baseline_project_ids={project.id}&comparison_project_ids={project.id}"
+        "&baseline_filter_brand=Auchan&comparison_filter_brand=Carrefour"
+    )
+
+    assert response.status_code == 200
+    assert "baseline_filter_brands=Auchan" in response.text
+    assert "comparison_filter_brands=Carrefour" in response.text
+    assert "report.pptx?" in response.text
+    assert "report.xlsx?" in response.text
+
+
+def test_compare_page_no_double_counting_for_same_project_disjoint_brands(
+    authenticated_client, internal_headers, project_factory, article_factory
+):
+    project = project_factory(name="No Double Count")
+    article_factory(project, count=4, retailer="Auchan")
+    article_factory(project, count=3, retailer="Carrefour")
+
+    ui_response = authenticated_client.get(
+        f"/compare?baseline_project_ids={project.id}&comparison_project_ids={project.id}"
+        "&baseline_filter_brand=Auchan&comparison_filter_brand=Carrefour"
+    )
+    api_response = authenticated_client.get(
+        f"/api/internal/compare?baseline_project_ids={project.id}&comparison_project_ids={project.id}"
+        "&baseline_filter_brand=Auchan&comparison_filter_brand=Carrefour",
+        headers=internal_headers,
+    )
+
+    assert ui_response.status_code == 200
+    assert api_response.status_code == 200
+    api_body = api_response.json()
+    # Baseline (4 Auchan) and comparison (3 Carrefour) never blend or sum
+    # into a combined 7 -- each side reports its own independent count.
+    assert api_body["baseline"]["kpis"]["unique_valid_articles"] == 4
+    assert api_body["comparison"]["kpis"]["unique_valid_articles"] == 3

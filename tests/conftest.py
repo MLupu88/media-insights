@@ -1,12 +1,17 @@
 import os
 
-os.environ.setdefault("ENVIRONMENT", "test")
-os.environ.setdefault("APP_PASSWORD", "test-password")
-os.environ.setdefault("SESSION_SECRET", "test-session-secret")
-os.environ.setdefault("MEDIA_APP_INTERNAL_SECRET", "test-internal-secret")
-os.environ.setdefault(
-    "DATABASE_URL", "postgresql+psycopg://msl:msl@localhost:5432/msl_insights_test"
+from test_support.db_safety import assert_safe_test_connection, assert_safe_test_database_url
+
+os.environ["ENVIRONMENT"] = "test"
+os.environ["APP_PASSWORD"] = "test-password"
+os.environ["SESSION_SECRET"] = "test-session-secret"
+os.environ["MEDIA_APP_INTERNAL_SECRET"] = "test-internal-secret"
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql+psycopg://msl:msl@localhost:5432/msl_insights_test"
 )
+assert_safe_test_database_url(TEST_DATABASE_URL)
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL  # unconditional — never setdefault
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,9 +24,23 @@ from app.models.project import Project
 
 @pytest.fixture(scope="session", autouse=True)
 def _database_schema():
-    Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        assert_safe_test_connection(connection)
+        Base.metadata.create_all(bind=connection)
     yield
-    Base.metadata.drop_all(bind=engine)
+    # Escape hatch used only by the nested-subprocess regression test in
+    # tests/test_database_safety_guard.py: that test spawns a second,
+    # fully independent pytest session against this same physical test
+    # database while this (outer) session is still mid-run — without this,
+    # the inner session's own drop_all at its exit would wipe the schema
+    # out from under the still-running outer session. create_all above is
+    # unconditional and idempotent either way, so skipping only drop_all
+    # here is non-destructive.
+    if os.environ.get("SKIP_TEST_DB_TEARDOWN") == "1":
+        return
+    with engine.begin() as connection:
+        assert_safe_test_connection(connection)
+        Base.metadata.drop_all(bind=connection)
 
 
 @pytest.fixture(autouse=True)

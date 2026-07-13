@@ -316,3 +316,22 @@ def test_rejected_insights_excluded_from_relationship_filtering(
 
     valid_ids = {i.id for i in updated.insights if i.validation_status == "valid"}
     assert valid_ids == set()
+
+
+def test_create_project_generation_does_not_crash_with_uploaded_file_ids(
+    db_session, project_factory, article_factory
+):
+    """Narrative generation writes used to call raw dataclasses.asdict on
+    the filters, which does not stringify uuid.UUID -- crashed for any
+    non-empty uploaded_file_ids. Must now use the canonical serializer.
+    """
+    import uuid
+
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    filters = AnalyticsFilters(uploaded_file_ids=(uuid.uuid4(),))
+
+    generation, is_new = create_project_generation(db_session, project, filters=filters)
+
+    assert is_new is True
+    assert generation.filters == {"source_files": [str(u) for u in filters.uploaded_file_ids]}

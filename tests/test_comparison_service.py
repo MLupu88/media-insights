@@ -467,3 +467,239 @@ def test_invalid_and_duplicate_articles_excluded_from_comparison(
     )
 
     assert result["baseline"]["kpis"]["unique_valid_articles"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase D corrections: _merge_filter_options (analytics_needs_review_count,
+# source-file identity)
+# ---------------------------------------------------------------------------
+
+
+def test_merged_analytics_needs_review_count_not_doubled_for_overlapping_projects(
+    db_session, project_factory, article_factory
+):
+    """The same project appearing on both sides of a comparison must not
+    cause its needs-review rows to be counted twice in the merged options.
+    """
+    from app.models.article import RetailerReviewStatus
+
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    article_factory(
+        project, count=2, retailer="unknown",
+        retailer_review_status=RetailerReviewStatus.NEEDS_REVIEW,
+    )
+
+    result = get_period_comparison(db_session, [project.id], [project.id])
+
+    assert result["available_filter_options"]["analytics_needs_review_count"] == 2
+
+
+def test_merged_analytics_needs_review_count_correct_for_disjoint_projects(
+    db_session, project_factory, article_factory
+):
+    from app.models.article import RetailerReviewStatus
+
+    baseline_project = project_factory(name="Baseline")
+    comparison_project = project_factory(name="Comparison")
+    article_factory(
+        baseline_project, count=1, retailer="unknown",
+        retailer_review_status=RetailerReviewStatus.NEEDS_REVIEW,
+    )
+    article_factory(
+        comparison_project, count=2, retailer="unknown",
+        retailer_review_status=RetailerReviewStatus.NEEDS_REVIEW,
+    )
+
+    result = get_period_comparison(db_session, [baseline_project.id], [comparison_project.id])
+
+    assert result["available_filter_options"]["analytics_needs_review_count"] == 3
+
+
+def test_merged_source_files_never_collapse_same_named_files_across_projects(
+    db_session, project_factory, article_factory, uploaded_file_factory
+):
+    """Two different files sharing an identical filename, one per project,
+    must remain two distinct entries in the merged options -- identity is
+    the file's UUID, never its filename.
+    """
+    baseline_project = project_factory(name="Baseline")
+    comparison_project = project_factory(name="Comparison")
+    baseline_file = uploaded_file_factory(baseline_project, original_filename="Q2 2026.xlsx")
+    comparison_file = uploaded_file_factory(comparison_project, original_filename="Q2 2026.xlsx")
+    article_factory(baseline_project, count=1, retailer="Auchan", uploaded_file_id=baseline_file.id)
+    article_factory(comparison_project, count=1, retailer="Carrefour", uploaded_file_id=comparison_file.id)
+
+    result = get_period_comparison(db_session, [baseline_project.id], [comparison_project.id])
+
+    same_named_entries = [
+        f for f in result["available_filter_options"]["source_files"]
+        if f["original_filename"] == "Q2 2026.xlsx"
+    ]
+    same_named_ids = {f["id"] for f in same_named_entries}
+    # Both same-named files remain distinct entries -- identity is the
+    # file's UUID, never its filename, so a name collision must never
+    # collapse two different projects' files into one option.
+    assert same_named_ids == {baseline_file.id, comparison_file.id}
+    assert len(same_named_entries) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase E: same-project brand-vs-brand comparison
+# ---------------------------------------------------------------------------
+
+
+def test_same_project_brand_vs_brand_produces_independent_populations(
+    db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=3, retailer="Auchan", audience=100.0)
+    article_factory(project, count=2, retailer="Carrefour", audience=50.0)
+
+    result = get_period_comparison(
+        db_session, [project.id], [project.id],
+        baseline_filters=AnalyticsFilters(brands=("Auchan",)),
+        comparison_filters=AnalyticsFilters(brands=("Carrefour",)),
+    )
+
+    assert result["baseline"]["kpis"]["unique_valid_articles"] == 3
+    assert result["comparison"]["kpis"]["unique_valid_articles"] == 2
+    assert result["baseline"]["kpis"]["total_reach"] == 300.0
+    assert result["comparison"]["kpis"]["total_reach"] == 100.0
+
+
+def test_same_project_brand_vs_brand_labels_are_brand_based_not_quarter_collision(
+    db_session, project_factory, article_factory
+):
+    project = project_factory(quarter="2026-Q2")
+    article_factory(project, count=1, retailer="Auchan")
+    article_factory(project, count=1, retailer="Carrefour")
+
+    result = get_period_comparison(
+        db_session, [project.id], [project.id],
+        baseline_filters=AnalyticsFilters(brands=("Auchan",)),
+        comparison_filters=AnalyticsFilters(brands=("Carrefour",)),
+    )
+
+    assert result["baseline"]["label"] == "Auchan"
+    assert result["comparison"]["label"] == "Carrefour"
+    assert result["baseline"]["label"] != result["comparison"]["label"]
+
+
+def test_same_project_brand_vs_brand_multi_brand_label_truncates(
+    db_session, project_factory, article_factory
+):
+    project = project_factory()
+    for brand in ("Auchan", "Carrefour", "Lidl"):
+        article_factory(project, count=1, retailer=brand)
+
+    result = get_period_comparison(
+        db_session, [project.id], [project.id],
+        baseline_filters=AnalyticsFilters(brands=("Auchan", "Carrefour", "Lidl")),
+        comparison_filters=AnalyticsFilters(brands=("Auchan",)),
+    )
+
+    assert result["baseline"]["label"] == "3 brands"
+    assert result["comparison"]["label"] == "Auchan"
+
+
+def test_same_project_same_filters_both_sides_falls_back_to_quarter_label(
+    db_session, project_factory, article_factory
+):
+    """No filter split at all -- completely unchanged pre-Phase-E
+    behavior, quarter-collision label included (this is not a new bug,
+    just confirming the fallback path is untouched).
+    """
+    project = project_factory(quarter="2026-Q2")
+    article_factory(project, count=1, retailer="Auchan")
+
+    result = get_period_comparison(db_session, [project.id], [project.id])
+
+    assert result["baseline"]["label"] == "Q2 2026"
+    assert result["comparison"]["label"] == "Q2 2026"
+
+
+def test_disjoint_project_labels_unaffected_by_phase_e_change(
+    db_session, project_factory, article_factory
+):
+    baseline_project = project_factory(name="Baseline", quarter="2026-Q1")
+    comparison_project = project_factory(name="Comparison", quarter="2026-Q2")
+    article_factory(baseline_project, count=1, retailer="Auchan")
+    article_factory(comparison_project, count=1, retailer="Auchan")
+
+    result = get_period_comparison(db_session, [baseline_project.id], [comparison_project.id])
+
+    assert result["baseline"]["label"] == "Q1 2026"
+    assert result["comparison"]["label"] == "Q2 2026"
+
+
+def test_same_project_brand_vs_brand_deltas_reflect_independent_populations(
+    db_session, project_factory, article_factory, classification_factory
+):
+    project = project_factory()
+    auchan_articles = article_factory(project, count=4, retailer="Auchan")
+    carrefour_articles = article_factory(project, count=2, retailer="Carrefour")
+    for a in auchan_articles:
+        classification_factory(a, sentiment="positive")
+    for a in carrefour_articles:
+        classification_factory(a, sentiment="negative")
+
+    result = get_period_comparison(
+        db_session, [project.id], [project.id],
+        baseline_filters=AnalyticsFilters(brands=("Auchan",)),
+        comparison_filters=AnalyticsFilters(brands=("Carrefour",)),
+    )
+
+    kpi_delta = result["deltas"]["kpis"]["unique_valid_articles"]
+    assert kpi_delta["baseline"] == 4
+    assert kpi_delta["comparison"] == 2
+    assert kpi_delta["absolute_delta"] == -2
+
+
+def test_same_project_brand_vs_brand_report_data_has_no_double_counted_articles(
+    report_db, project_factory, article_factory
+):
+    """Disjoint-brand filters on each side must never list the same
+    article under both Baseline and Comparison in the exported Article
+    Detail rows.
+    """
+    from app.services.report_data import build_comparison_report_data
+
+    project = project_factory()
+    article_factory(project, count=3, retailer="Auchan")
+    article_factory(project, count=2, retailer="Carrefour")
+
+    data = build_comparison_report_data(
+        report_db, [project.id], [project.id],
+        baseline_filters=AnalyticsFilters(brands=("Auchan",)),
+        comparison_filters=AnalyticsFilters(brands=("Carrefour",)),
+    )
+
+    article_ids = [row.article_id for row in data.article_detail]
+    assert len(article_ids) == len(set(article_ids))  # no duplicates
+    assert len(data.article_detail) == 5
+    baseline_ids = {row.article_id for row in data.article_detail if row.period == "Baseline"}
+    comparison_ids = {row.article_id for row in data.article_detail if row.period == "Comparison"}
+    assert baseline_ids.isdisjoint(comparison_ids)
+    assert data.baseline_label == "Auchan"
+    assert data.comparison_label == "Carrefour"
+
+
+def test_disjoint_project_comparison_unaffected_when_split_filters_omitted(
+    db_session, project_factory, article_factory
+):
+    """Existing project-vs-project comparisons (no baseline_filters/
+    comparison_filters passed) are completely unaffected by Phase E.
+    """
+    baseline_project = project_factory(name="Baseline")
+    comparison_project = project_factory(name="Comparison")
+    article_factory(baseline_project, count=3, retailer="Auchan")
+    article_factory(comparison_project, count=5, retailer="Auchan")
+
+    result = get_period_comparison(
+        db_session, [baseline_project.id], [comparison_project.id],
+        filters=AnalyticsFilters(brands=("Auchan",)),
+    )
+
+    assert result["baseline"]["kpis"]["unique_valid_articles"] == 3
+    assert result["comparison"]["kpis"]["unique_valid_articles"] == 5
