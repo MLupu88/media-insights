@@ -14,6 +14,9 @@ def create_project(db: Session, data: ProjectCreate) -> Project:
     project = Project(
         name=data.name,
         quarter=data.quarter,
+        period_start=data.period_start,
+        period_end=data.period_end,
+        client_name=data.client_name,
         description=data.description,
     )
     db.add(project)

@@ -96,12 +96,33 @@ def test_retailer_inferred_from_filename(standard_workbook_path):
     assert all(row.retailer == "Auchan" for row in result.rows)
 
 
-def test_explicit_retailer_hint_overrides_filename(standard_workbook_path):
+def test_confirmed_retailer_hint_overrides_filename(standard_workbook_path):
+    """A *confirmed* file-level hint (tier 2) wins over filename inference
+    (tier 4) for a blank row value — the standard workbook fixture has no
+    brand column, so every row's mapped value is blank.
+    """
+    result = parse_workbook(
+        str(standard_workbook_path),
+        "Auchan Q2 2026.xlsx",
+        retailer_hint="Carrefour",
+        retailer_hint_confirmed=True,
+    )
+
+    assert all(row.retailer == "Carrefour" for row in result.rows)
+    assert all(row.retailer_confidence == "confirmed_mapping" for row in result.rows)
+
+
+def test_unconfirmed_retailer_hint_is_ignored(standard_workbook_path):
+    """An *unconfirmed* hint must never be trusted — Phase B's approved
+    correction. It falls through to filename inference instead of
+    silently winning, exactly as an old, never-confirmed hint would.
+    """
     result = parse_workbook(
         str(standard_workbook_path), "Auchan Q2 2026.xlsx", retailer_hint="Carrefour"
     )
 
-    assert all(row.retailer == "Carrefour" for row in result.rows)
+    assert all(row.retailer == "Auchan" for row in result.rows)
+    assert all(row.retailer_confidence == "filename_fallback" for row in result.rows)
 
 
 def test_raw_json_preserves_original_values(standard_workbook_path):

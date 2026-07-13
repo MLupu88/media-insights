@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -26,6 +27,40 @@ class ImportStatus:
     ALL = (VALID, INVALID)
 
 
+class RetailerConfidence:
+    """How `Article.retailer` was assigned — the brand-detection decision
+    tree's audit trail (approved reporting-scope plan, §8). `LEGACY` is the
+    backfill sentinel for every row that existed before this column did;
+    it is honest about the fact those rows were never tracked this way,
+    rather than claiming a confidence tier that was never actually applied.
+    """
+
+    EXPLICIT_COLUMN = "explicit_column"
+    CONFIRMED_MAPPING = "confirmed_mapping"
+    FILE_LEVEL_INFERENCE = "file_level_inference"
+    FILENAME_FALLBACK = "filename_fallback"
+    NEEDS_REVIEW = "needs_review"
+    MANUAL_CORRECTION = "manual_correction"
+    LEGACY = "legacy"
+
+    ALL = (
+        EXPLICIT_COLUMN,
+        CONFIRMED_MAPPING,
+        FILE_LEVEL_INFERENCE,
+        FILENAME_FALLBACK,
+        NEEDS_REVIEW,
+        MANUAL_CORRECTION,
+        LEGACY,
+    )
+
+
+class RetailerReviewStatus:
+    CONFIRMED = "confirmed"
+    NEEDS_REVIEW = "needs_review"
+
+    ALL = (CONFIRMED, NEEDS_REVIEW)
+
+
 class Article(Base):
     __tablename__ = "articles"
     __table_args__ = (
@@ -33,6 +68,12 @@ class Article(Base):
         Index("ix_articles_uploaded_file_id", "uploaded_file_id"),
         Index("ix_articles_fingerprint", "fingerprint"),
         Index("ix_articles_project_id_fingerprint", "project_id", "fingerprint"),
+        Index(
+            "ix_articles_project_id_retailer_review_status",
+            "project_id",
+            "retailer_review_status",
+            postgresql_where=text("retailer_review_status = 'needs_review'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -76,6 +117,14 @@ class Article(Base):
 
     import_status: Mapped[str] = mapped_column(String(16), nullable=False)
     import_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    retailer_confidence: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=RetailerConfidence.LEGACY
+    )
+    retailer_review_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=RetailerReviewStatus.CONFIRMED
+    )
+    retailer_raw_value: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

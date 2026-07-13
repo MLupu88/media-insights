@@ -1,4 +1,9 @@
-from app.models.article import Article, ImportStatus
+from app.models.article import (
+    Article,
+    ImportStatus,
+    RetailerConfidence,
+    RetailerReviewStatus,
+)
 from app.models.chat import (
     ChatMessage,
     ChatMessageRole,
@@ -14,6 +19,7 @@ from app.models.classification import (
     ClassificationBatchStatus,
     ClassificationTaxonomy,
 )
+from app.models.import_batch import ImportBatch, ImportBatchStatus
 from app.models.narrative import (
     NarrativeGeneration,
     NarrativeGenerationStatus,
@@ -29,8 +35,12 @@ __all__ = [
     "AnalysisStatus",
     "UploadedFile",
     "UploadedFileStatus",
+    "ImportBatch",
+    "ImportBatchStatus",
     "Article",
     "ImportStatus",
+    "RetailerConfidence",
+    "RetailerReviewStatus",
     "Classification",
     "ClassificationBatch",
     "ClassificationBatchArticle",

@@ -127,7 +127,10 @@ def create_project_action(
     except ValidationError as exc:
         form_errors: dict[str, str] = {}
         for error in exc.errors():
-            field = str(error["loc"][0])
+            # A model-level validator (e.g. "quarter or a complete date
+            # range is required") has no single field association — this
+            # web form only exposes `quarter`, so its error surfaces there.
+            field = str(error["loc"][0]) if error["loc"] else "quarter"
             form_errors.setdefault(field, error["msg"])
 
         projects = list_projects(db)

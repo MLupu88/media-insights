@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import CheckConstraint, Date, DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,13 +38,31 @@ class AnalysisStatus:
 
 
 class Project(Base):
+    """`quarter` is optional as of the reporting-scope model: a project must
+    supply a valid `quarter` OR a complete `period_start`/`period_end` range
+    (both together are also allowed) — enforced at both the Pydantic layer
+    (`ProjectCreate`) and the DB layer (`ck_projects_period_integrity`), so
+    a path that bypasses the API still can't create an invalid row.
+    """
+
     __tablename__ = "projects"
+    __table_args__ = (
+        CheckConstraint(
+            "(quarter IS NOT NULL OR (period_start IS NOT NULL AND period_end IS NOT NULL)) "
+            "AND (period_start IS NULL) = (period_end IS NULL) "
+            "AND (period_start IS NULL OR period_end IS NULL OR period_end >= period_start)",
+            name="ck_projects_period_integrity",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    quarter: Mapped[str] = mapped_column(String(16), nullable=False)
+    quarter: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    client_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=ProjectStatus.CREATED
@@ -76,6 +94,12 @@ class Project(Base):
         back_populates="project",
         cascade="all, delete-orphan",
         order_by="UploadedFile.created_at.desc()",
+    )
+    import_batches = relationship(
+        "ImportBatch",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="ImportBatch.created_at.desc()",
     )
     articles = relationship(
         "Article", back_populates="project", cascade="all, delete-orphan"

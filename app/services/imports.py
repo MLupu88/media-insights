@@ -1,13 +1,15 @@
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.article import Article, ImportStatus
+from app.models.article import Article, ImportStatus, RetailerReviewStatus
+from app.models.import_batch import ImportBatch, ImportBatchStatus
 from app.models.project import Project, ProjectStatus
 from app.models.uploaded_file import UploadedFile, UploadedFileStatus
 from app.services.excel_parser import ParserError, parse_workbook
-from app.services.retailers import infer_retailer
+from app.services.retailers import assign_retailer
 
 
 def _load_seen_fingerprints(db: Session, project_id: uuid.UUID) -> dict[str, uuid.UUID]:
@@ -60,6 +62,7 @@ def import_uploaded_file(db: Session, uploaded_file: UploadedFile) -> None:
             uploaded_file.stored_path,
             uploaded_file.original_filename,
             uploaded_file.retailer_hint,
+            uploaded_file.retailer_hint_confirmed,
         )
     except ParserError as exc:
         uploaded_file.status = UploadedFileStatus.FAILED
@@ -115,6 +118,9 @@ def import_uploaded_file(db: Session, uploaded_file: UploadedFile) -> None:
                 duplicate_of_article_id=duplicate_of_id,
                 import_status=parsed_row.import_status,
                 import_error=parsed_row.import_error,
+                retailer_confidence=parsed_row.retailer_confidence,
+                retailer_review_status=parsed_row.retailer_review_status,
+                retailer_raw_value=parsed_row.retailer_raw_value,
             )
         )
 
@@ -138,7 +144,13 @@ def import_uploaded_file(db: Session, uploaded_file: UploadedFile) -> None:
     uploaded_file.detected_retailer = (
         parse_result.rows[0].retailer
         if parse_result.rows
-        else infer_retailer(uploaded_file.retailer_hint, uploaded_file.original_filename, None)
+        else assign_retailer(
+            None,
+            retailer_hint=uploaded_file.retailer_hint,
+            retailer_hint_confirmed=uploaded_file.retailer_hint_confirmed,
+            filename=uploaded_file.original_filename,
+            dominant_value=None,
+        ).value
     )
     uploaded_file.status = UploadedFileStatus.COMPLETED
     db.commit()
@@ -159,3 +171,87 @@ def retry_import(db: Session, uploaded_file: UploadedFile) -> None:
     db.commit()
 
     import_uploaded_file(db, uploaded_file)
+
+
+# --- ImportBatch lifecycle -------------------------------------------------
+#
+# The batch row is created and committed as the very first write of the
+# request, before any file is parsed, and finalized once at the end — each
+# commit touches only the batch's own fields, since every other write in
+# the loop (UploadedFile/Article creation, project totals) is already
+# committed by `import_uploaded_file` before control returns here. A hard
+# process crash between those two commits simply leaves the row visibly at
+# `processing` with `completed_at IS NULL` forever — the honest signal
+# required, with no watchdog/sweeper needed to produce it.
+
+
+def start_import_batch(db: Session, project_id: uuid.UUID) -> ImportBatch:
+    batch = ImportBatch(project_id=project_id, status=ImportBatchStatus.PROCESSING)
+    db.add(batch)
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
+def record_batch_file_result(batch: ImportBatch, uploaded_file: UploadedFile) -> None:
+    """Accumulates one successfully-processed file's outcome into the
+    batch's in-memory counters. Does not commit — the caller commits once,
+    at finalization, so the batch's row-level counters never partially
+    reflect an in-progress request.
+    """
+    batch.files_processed += 1
+    if uploaded_file.status == UploadedFileStatus.FAILED:
+        batch.files_rejected += 1
+    else:
+        batch.files_accepted += 1
+    batch.total_rows += uploaded_file.row_count
+    batch.valid_rows += uploaded_file.valid_row_count
+    batch.invalid_rows += uploaded_file.invalid_row_count
+    batch.duplicate_rows += uploaded_file.duplicate_row_count
+
+
+def record_batch_rejected_file(batch: ImportBatch) -> None:
+    """A file rejected before an `UploadedFile` row even existed (wrong
+    extension, over the size limit) — still counted, with no row-level
+    counters to add.
+    """
+    batch.files_processed += 1
+    batch.files_rejected += 1
+
+
+def finalize_import_batch(db: Session, batch: ImportBatch, error_reasons: list[str]) -> None:
+    needs_review_rows = db.execute(
+        select(func.count(Article.id))
+        .select_from(Article)
+        .join(UploadedFile, Article.uploaded_file_id == UploadedFile.id)
+        .where(UploadedFile.import_batch_id == batch.id)
+        .where(Article.retailer_review_status == RetailerReviewStatus.NEEDS_REVIEW)
+    ).scalar_one()
+    batch.needs_review_rows = needs_review_rows
+
+    if batch.files_processed > 0 and batch.files_rejected == batch.files_processed:
+        batch.status = ImportBatchStatus.FAILED
+    elif batch.files_rejected > 0:
+        batch.status = ImportBatchStatus.PARTIALLY_COMPLETED
+    else:
+        batch.status = ImportBatchStatus.COMPLETED
+
+    batch.completed_at = datetime.now(timezone.utc)
+    batch.error_summary = (
+        "; ".join(error_reasons) if error_reasons and batch.status != ImportBatchStatus.COMPLETED else None
+    )
+    db.commit()
+
+
+def fail_import_batch(db: Session, batch_id: uuid.UUID, error_summary: str) -> None:
+    """Safety net for a Python-level exception that escapes the per-file
+    loop entirely (not a hard process crash — those are, by construction,
+    never caught by anything and simply leave the batch at `processing`).
+    """
+    db.rollback()
+    batch = db.get(ImportBatch, batch_id)
+    if batch is not None:
+        batch.status = ImportBatchStatus.FAILED
+        batch.completed_at = datetime.now(timezone.utc)
+        batch.error_summary = error_summary
+        db.commit()

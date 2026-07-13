@@ -7,8 +7,8 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from app.models.article import ImportStatus
-from app.services.retailers import infer_retailer
+from app.models.article import ImportStatus, RetailerReviewStatus
+from app.services.retailers import assign_retailer, compute_dominant_retailer
 
 MIN_HEADER_MATCHES = 4
 MAX_HEADER_SCAN_ROWS = 15
@@ -106,6 +106,9 @@ class ParsedRow:
     fingerprint: str = ""
     import_status: str = ImportStatus.VALID
     import_error: str | None = None
+    retailer_confidence: str = ""
+    retailer_review_status: str = RetailerReviewStatus.NEEDS_REVIEW
+    retailer_raw_value: str | None = None
 
 
 @dataclass
@@ -230,7 +233,10 @@ def _json_safe(value: Any) -> Any:
 
 
 def parse_workbook(
-    file_path: str, original_filename: str, retailer_hint: str | None = None
+    file_path: str,
+    original_filename: str,
+    retailer_hint: str | None = None,
+    retailer_hint_confirmed: bool = False,
 ) -> ParseResult:
     try:
         workbook = load_workbook(filename=file_path, data_only=True, read_only=False)
@@ -238,6 +244,23 @@ def parse_workbook(
         raise ParserError(f"Could not open workbook: {exc}") from exc
 
     worksheet, header_row, header_map, header_labels = _select_worksheet(workbook)
+
+    # Tier-3 (file-level dominance) fallback needs to see every row's raw
+    # mapped brand value up front — a lightweight pre-scan over just that
+    # one column, before the main per-row loop applies the full decision
+    # tree. Safe to iterate the worksheet twice: `read_only=False` above
+    # loads the whole workbook into memory, unlike streaming mode.
+    retailer_col_idx = next(
+        (col for col, canonical_field in header_map.items() if canonical_field == RETAILER_COLUMN_FIELD),
+        None,
+    )
+    dominant_value = None
+    if retailer_col_idx is not None:
+        raw_brand_values = [
+            normalize_text_value(row[retailer_col_idx - 1].value)
+            for row in worksheet.iter_rows(min_row=header_row + 1, max_row=worksheet.max_row)
+        ]
+        dominant_value = compute_dominant_retailer(raw_brand_values)
 
     rows: list[ParsedRow] = []
     for row in worksheet.iter_rows(min_row=header_row + 1, max_row=worksheet.max_row):
@@ -279,11 +302,14 @@ def parse_workbook(
         if retailer_column_cell is not None:
             mapped_brand_value = normalize_text_value(retailer_column_cell.value)
 
-        retailer = infer_retailer(
+        assignment = assign_retailer(
+            mapped_brand_value,
             retailer_hint=retailer_hint,
+            retailer_hint_confirmed=retailer_hint_confirmed,
             filename=original_filename,
-            mapped_value=mapped_brand_value,
+            dominant_value=dominant_value,
         )
+        retailer = assignment.value
 
         publication_date = None
         if "publication_date" in field_cells:
@@ -334,6 +360,13 @@ def parse_workbook(
                 fingerprint=fingerprint,
                 import_status=import_status,
                 import_error=import_error,
+                retailer_confidence=assignment.confidence,
+                retailer_review_status=(
+                    RetailerReviewStatus.NEEDS_REVIEW
+                    if assignment.needs_review
+                    else RetailerReviewStatus.CONFIRMED
+                ),
+                retailer_raw_value=assignment.raw_value,
             )
         )
 
