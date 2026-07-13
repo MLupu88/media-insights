@@ -115,6 +115,7 @@ def _methodology_slide(prs, metadata, extra_lines: list[str] | None = None) -> N
         f"Filters: {metadata.filters_label}",
         f"Generated: {metadata.generated_at.strftime('%Y-%m-%d %H:%M UTC')}",
         metadata.population_definition,
+        metadata.ai_methodology_note,
         metadata.chat_exclusion_note,
         f"Article detail: showing {coverage.shown_count:,} of {coverage.total_count:,} eligible articles"
         + (" (truncated)" if coverage.truncated else ""),

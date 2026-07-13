@@ -35,6 +35,7 @@ from app.services.chat_contract import CAUSAL_LANGUAGE_MARKERS
 from app.services.chat_tools import ChatScopeContext, find_latest_matching_generation
 from app.services.comparison import get_period_comparison
 from app.services.report_contract import (
+    AI_METHODOLOGY_NOTE,
     CHAT_EXCLUSION_NOTE,
     MAX_ARTICLE_DETAIL_ROWS,
     MAX_INSIGHTS_PER_REPORT,
@@ -107,6 +108,7 @@ class ReportMetadata:
     generated_at: datetime
     population_definition: str
     chat_exclusion_note: str
+    ai_methodology_note: str
     article_detail_coverage: SectionCoverage
     insight_coverage: InsightCoverage
 
@@ -312,6 +314,7 @@ def build_project_report_data(
         generated_at=datetime.now(timezone.utc),
         population_definition=POPULATION_DEFINITION,
         chat_exclusion_note=CHAT_EXCLUSION_NOTE,
+        ai_methodology_note=AI_METHODOLOGY_NOTE,
         article_detail_coverage=SectionCoverage(
             shown_count=len(article_detail), total_count=total_articles
         ),
@@ -374,6 +377,7 @@ def build_comparison_report_data(
         generated_at=datetime.now(timezone.utc),
         population_definition=POPULATION_DEFINITION,
         chat_exclusion_note=CHAT_EXCLUSION_NOTE,
+        ai_methodology_note=AI_METHODOLOGY_NOTE,
         article_detail_coverage=SectionCoverage(
             shown_count=len(article_detail), total_count=total_articles
         ),

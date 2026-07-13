@@ -28,6 +28,7 @@ def _metadata_pairs(metadata, extra: list[tuple[str, str]] | None = None) -> lis
         ("Filters", metadata.filters_label),
         ("Generated", metadata.generated_at.strftime("%Y-%m-%d %H:%M UTC")),
         ("Population", metadata.population_definition),
+        ("AI-assisted analysis", metadata.ai_methodology_note),
         ("Chat exclusion", metadata.chat_exclusion_note),
         (
             "Article detail coverage",

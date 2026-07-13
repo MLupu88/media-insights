@@ -41,4 +41,12 @@ CHAT_EXCLUSION_NOTE = (
     "explicitly labeled as such."
 )
 
+# Provider-neutral by design — never names the underlying model/vendor.
+# Reinforces the existing causal-language filtering/validation/caveat
+# behavior rather than replacing it.
+AI_METHODOLOGY_NOTE = (
+    "Insights are AI-assisted and grounded in the available project data. "
+    "They are validated and never claim to prove causation."
+)
+
 NO_DATA_MESSAGE = "No data available for the selected filters."
