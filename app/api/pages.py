@@ -1,4 +1,5 @@
 import uuid
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import RedirectResponse
@@ -28,6 +29,20 @@ def _format_number(value) -> str:
 
 
 templates.env.filters["number"] = _format_number
+
+
+def build_query_string(params: dict) -> str:
+    """URL-encodes a dict of query params for template-built links,
+    dropping empty/None values. Used so export links carry the current
+    filters without manually concatenating strings in Jinja — an export
+    must reflect exactly the filtered view it was linked from, never
+    silently widen to the whole unfiltered project.
+    """
+    clean = {k: v for k, v in params.items() if v not in (None, "", [])}
+    return urlencode(clean, doseq=True)
+
+
+templates.env.globals["build_query_string"] = build_query_string
 
 
 def render(request: Request, template_name: str, context: dict, status_code: int = 200):

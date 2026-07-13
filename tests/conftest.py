@@ -53,6 +53,23 @@ def db_session():
 
 
 @pytest.fixture
+def report_db():
+    """A fresh session, separate from `db_session`.
+
+    `build_project_report_data`/`build_comparison_report_data`
+    (app/services/report_data.py) must issue `SET TRANSACTION ISOLATION
+    LEVEL ...` as the *first* statement on their session (a hard Postgres
+    requirement) — exactly like the real `GET /report.*` routes, which each
+    get a brand-new per-request session from FastAPI's `get_db`. The shared
+    `db_session` fixture already has prior statements on it by the time a
+    test's `project_factory`/`article_factory` calls finish, so it cannot
+    be reused for report-data calls under test.
+    """
+    with SessionLocal() as session:
+        yield session
+
+
+@pytest.fixture
 def authenticated_client(client):
     response = client.post(
         "/login", data={"password": "test-password"}, follow_redirects=False

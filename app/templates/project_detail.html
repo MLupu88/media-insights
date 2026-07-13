@@ -236,6 +236,23 @@
 
       {% include "components/analytics_filters.html" %}
 
+      {% set export_params = {
+        "brand": analytics_summary.filters.brand,
+        "publication": analytics_summary.filters.publication,
+        "primary_topic": analytics_summary.filters.primary_topic,
+        "communication_category": analytics_summary.filters.communication_category,
+        "sentiment": analytics_summary.filters.sentiment,
+        "state": analytics_summary.filters.state,
+      } %}
+      <div class="mt-4 flex flex-wrap gap-4 text-sm">
+        <a href="/projects/{{ project.id }}/report.pptx?{{ build_query_string(export_params) }}" class="font-medium text-ink underline transition hover:text-accent">
+          Export current view to PowerPoint
+        </a>
+        <a href="/projects/{{ project.id }}/report.xlsx?{{ build_query_string(export_params) }}" class="font-medium text-ink underline transition hover:text-accent">
+          Export current view to Excel
+        </a>
+      </div>
+
       <div class="mt-8">
         {{ section_title("Project KPIs", "Pipeline totals are always project-wide; the rest respect the active filters above.") }}
         {{ stat_tile_grid([

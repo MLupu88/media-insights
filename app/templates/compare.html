@@ -144,6 +144,25 @@
         </form>
       </div>
 
+      {% set export_params = {
+        "baseline_project_ids": baseline.project_ids,
+        "comparison_project_ids": comparison.project_ids,
+        "brand": baseline.filters.brand,
+        "publication": baseline.filters.publication,
+        "primary_topic": baseline.filters.primary_topic,
+        "communication_category": baseline.filters.communication_category,
+        "sentiment": baseline.filters.sentiment,
+        "state": baseline.filters.state,
+      } %}
+      <div class="mt-4 flex flex-wrap gap-4 text-sm">
+        <a href="/compare/report.pptx?{{ build_query_string(export_params) }}" class="font-medium text-ink underline transition hover:text-accent">
+          Export current view to PowerPoint
+        </a>
+        <a href="/compare/report.xlsx?{{ build_query_string(export_params) }}" class="font-medium text-ink underline transition hover:text-accent">
+          Export current view to Excel
+        </a>
+      </div>
+
       <div class="mt-8">
         {{ section_title("Ask about this comparison", "Answers are grounded strictly in this baseline/comparison selection — never anchored to one side.") }}
         {% if chat_session %}
