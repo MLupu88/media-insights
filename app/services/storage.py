@@ -1,3 +1,4 @@
+import shutil
 import uuid
 from pathlib import Path
 
@@ -68,3 +69,19 @@ def save_upload_file(project_id: uuid.UUID, upload_file: UploadFile) -> tuple[st
             out_file.write(chunk)
 
     return stored_filename, str(stored_path), size_bytes
+
+
+def delete_project_upload_dir(project_id: uuid.UUID) -> None:
+    """Deletes the project's entire upload directory, if it exists.
+
+    Routes the target path through `resolve_upload_path` -- the same
+    safe-path rule every individual file operation already uses -- so a
+    directory outside the configured upload root can never be deleted,
+    even in principle (a UUID-derived path segment can't itself contain a
+    traversal sequence, but this keeps exactly one safe-path rule in the
+    codebase rather than a second, parallel one). A no-op if the directory
+    was never created (e.g. a project that had no files uploaded).
+    """
+    resolved = resolve_upload_path(str(project_id))
+    if resolved.exists():
+        shutil.rmtree(resolved)

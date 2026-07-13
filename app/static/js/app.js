@@ -106,3 +106,18 @@ document.querySelectorAll("[data-upload-dropzone]").forEach((dropzone) => {
     }
   });
 });
+
+// Delete-project confirmation: the submit button stays disabled until the
+// typed value exactly matches the project's own name -- server-side
+// validation (app/api/pages.py::delete_project_action) is the real
+// safety check; this is only to prevent an accidental click.
+document.querySelectorAll("[data-delete-confirm-input]").forEach((input) => {
+  const expected = input.getAttribute("data-expected-name") || "";
+  const form = input.closest("form");
+  const submitButton = form ? form.querySelector("[data-delete-confirm-submit]") : null;
+  if (!submitButton) return;
+
+  input.addEventListener("input", () => {
+    submitButton.disabled = input.value !== expected;
+  });
+});

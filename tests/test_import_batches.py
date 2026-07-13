@@ -1,5 +1,3 @@
-import pytest
-
 from app.models.import_batch import ImportBatch, ImportBatchStatus
 from app.models.project import Project
 from app.models.uploaded_file import UploadedFile
@@ -185,6 +183,11 @@ def test_fail_import_batch_marks_failed_with_completed_at_set(db_session, projec
 def test_batch_finalized_as_failed_when_an_unexpected_exception_escapes_the_loop(
     authenticated_client, db_session, standard_workbook_path, monkeypatch
 ):
+    """The upload endpoint never re-raises to a raw 500 -- it renders the
+    Files page with a readable error and still finalizes the batch as
+    failed (Part 3 hotfix: see tests/test_import_error_handling.py for the
+    full regression suite around this behavior).
+    """
     project = _create_project(authenticated_client, db_session)
 
     def _boom(db, uploaded_file):
@@ -194,11 +197,12 @@ def test_batch_finalized_as_failed_when_an_unexpected_exception_escapes_the_loop
 
     monkeypatch.setattr(files_module, "import_uploaded_file", _boom)
 
-    with pytest.raises(RuntimeError):
-        authenticated_client.post(
-            f"/projects/{project.id}/files",
-            files=_files_payload((standard_workbook_path, "Auchan Q2 2026.xlsx")),
-        )
+    response = authenticated_client.post(
+        f"/projects/{project.id}/files",
+        files=_files_payload((standard_workbook_path, "Auchan Q2 2026.xlsx")),
+    )
+    assert response.status_code == 500
+    assert "simulated unexpected failure" not in response.text
 
     batch = db_session.query(ImportBatch).filter_by(project_id=project.id).one()
     assert batch.status == ImportBatchStatus.FAILED

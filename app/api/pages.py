@@ -2,7 +2,7 @@ import dataclasses
 import uuid
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Form, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -25,7 +25,7 @@ from app.services.chat_service import find_comparison_session, get_project_own_c
 from app.services.classification import get_project_summary
 from app.services.comparison import ComparisonServiceError, get_period_comparison
 from app.services.narrative_service import get_project_narrative_generations
-from app.services.projects import create_project, list_projects
+from app.services.projects import create_project, delete_project, list_projects
 from app.services.retailers import CANONICAL_RETAILERS
 from app.services.review import count_needs_review, get_review_groups
 
@@ -221,10 +221,19 @@ def render_project_detail(
 @router.get("/")
 def projects_page(request: Request, db: Session = Depends(get_db)):
     projects = list_projects(db)
+    deleted_project_name = request.query_params.get("deleted")
+    cleanup_warning = request.query_params.get("cleanup_warning") == "1"
     return render(
         request,
         "projects.html",
-        {"projects": projects, "form_errors": {}, "form_values": {}, "open_modal": False},
+        {
+            "projects": projects,
+            "form_errors": {},
+            "form_values": {},
+            "open_modal": False,
+            "deleted_project_name": deleted_project_name,
+            "cleanup_warning": cleanup_warning,
+        },
     )
 
 
@@ -262,6 +271,49 @@ def create_project_action(
 
     create_project(db, data)
     return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/projects/{project_id}/delete")
+def delete_project_action(
+    project_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    confirm_name: str = Form(""),
+):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+
+    if confirm_name != project.name:
+        # Defense in depth -- the confirmation modal's own JS already
+        # requires an exact match before the submit button is enabled,
+        # but the server must not trust client-side validation for a
+        # destructive action.
+        projects = list_projects(db)
+        return render(
+            request,
+            "projects.html",
+            {
+                "projects": projects,
+                "form_errors": {},
+                "form_values": {},
+                "open_modal": False,
+                "delete_error": "Project name did not match. Nothing was deleted.",
+            },
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    project_name = project.name
+    filesystem_cleanup_ok = delete_project(db, project)
+
+    redirect_params = {"deleted": project_name}
+    if not filesystem_cleanup_ok:
+        # Never expose the server path -- just signal that manual cleanup
+        # may be needed, already logged server-side with the full detail.
+        redirect_params["cleanup_warning"] = "1"
+    return RedirectResponse(
+        url=f"/?{urlencode(redirect_params)}", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @router.get("/projects/{project_id}")

@@ -54,6 +54,12 @@ def upload_files(
         )
 
     batch = start_import_batch(db, project_id)
+    # Captured as a plain UUID immediately, while the session is known
+    # healthy -- if a later exception leaves the transaction aborted,
+    # `batch.id` (an attribute access on the ORM object) could itself
+    # raise `PendingRollbackError` before `fail_import_batch`'s own
+    # `db.rollback()` ever runs. A plain UUID has no such risk.
+    batch_id = batch.id
     error_reasons: list[str] = []
 
     try:
@@ -106,9 +112,31 @@ def upload_files(
                     "reason": uploaded_file.error_message,
                 }
             )
-    except Exception as exc:
-        fail_import_batch(db, batch.id, f"Unexpected error during import: {exc}")
-        raise
+    except Exception:
+        # Never a raw 500: mark the batch failed (rollback-then-reload,
+        # via `batch_id` -- a plain UUID captured before this request did
+        # anything that could fail, never the ORM object itself, which
+        # could raise `PendingRollbackError` on attribute access against
+        # an already-aborted transaction) and render the same Files page
+        # the rest of this route renders, with a short, safe message. The
+        # underlying exception is not shown to the user.
+        fail_import_batch(db, batch_id, "Unexpected error during import.")
+        db.refresh(project)
+        results.append(
+            {
+                "filename": None,
+                "accepted": False,
+                "reason": "An unexpected error occurred while processing this upload. The import has been marked as failed.",
+            }
+        )
+        return render_project_detail(
+            request,
+            db,
+            project,
+            active_tab="files",
+            upload_results=results,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     finalize_import_batch(db, batch, error_reasons)
 

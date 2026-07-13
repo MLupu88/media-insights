@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.article import Article, ImportStatus, RetailerReviewStatus
@@ -11,6 +12,22 @@ from app.models.uploaded_file import UploadedFile, UploadedFileStatus
 from app.services.dedup import lock_project_for_dedup, order_by_canonical
 from app.services.excel_parser import ParserError, parse_workbook
 from app.services.retailers import assign_retailer
+
+
+def _safe_import_error_message(exc: Exception) -> str:
+    """A short, user-safe message for a row-level database failure during
+    article insertion -- never the raw SQL statement or parameter payload
+    (which could contain source-workbook content, or reveal schema/query
+    internals). `DataError` (e.g. Postgres `StringDataRightTruncation`) gets
+    a slightly more specific, still-safe hint since it's an actionable,
+    recognizable case; anything else gets a generic message.
+    """
+    if isinstance(exc, DataError):
+        return (
+            "One or more field values in this file exceed the database's "
+            "allowed length. Please check the source workbook and try again."
+        )
+    return "A database error occurred while saving articles from this file."
 
 
 def _load_seen_fingerprints(db: Session, project_id: uuid.UUID) -> dict[str, uuid.UUID]:
@@ -53,6 +70,15 @@ def recompute_project_totals(db: Session, project_id: uuid.UUID, commit: bool = 
 
 
 def import_uploaded_file(db: Session, uploaded_file: UploadedFile) -> None:
+    # Captured as plain values up front, before any operation that could
+    # fail and leave the session's transaction aborted -- attribute access
+    # on an ORM object after a failed flush/commit can itself raise
+    # `PendingRollbackError` (SQLAlchemy re-fetches expired attributes
+    # lazily, and a lazy-load against an aborted transaction fails). A
+    # plain `uuid.UUID` has no such risk.
+    uploaded_file_id = uploaded_file.id
+    project_id = uploaded_file.project_id
+
     uploaded_file.status = UploadedFileStatus.PROCESSING
     uploaded_file.error_message = None
     db.commit()
@@ -68,22 +94,22 @@ def import_uploaded_file(db: Session, uploaded_file: UploadedFile) -> None:
         uploaded_file.status = UploadedFileStatus.FAILED
         uploaded_file.error_message = str(exc)
         db.commit()
-        recompute_project_totals(db, uploaded_file.project_id)
+        recompute_project_totals(db, project_id)
         return
     except Exception as exc:  # noqa: BLE001 - any parsing failure must not crash the request
         uploaded_file.status = UploadedFileStatus.FAILED
         uploaded_file.error_message = f"Unexpected error while parsing: {exc}"
         db.commit()
-        recompute_project_totals(db, uploaded_file.project_id)
+        recompute_project_totals(db, project_id)
         return
 
     # Held from here through the commit below — the same project-scoped
     # lock a Review correction acquires (app/services/dedup.py) — so an
     # import and a concurrent correction can never race to create two
     # canonicals for the same fingerprint.
-    lock_project_for_dedup(db, uploaded_file.project_id)
+    lock_project_for_dedup(db, project_id)
 
-    seen_fingerprints = _load_seen_fingerprints(db, uploaded_file.project_id)
+    seen_fingerprints = _load_seen_fingerprints(db, project_id)
 
     valid_count = 0
     invalid_count = 0
@@ -159,9 +185,31 @@ def import_uploaded_file(db: Session, uploaded_file: UploadedFile) -> None:
         ).value
     )
     uploaded_file.status = UploadedFileStatus.COMPLETED
-    db.commit()
 
-    recompute_project_totals(db, uploaded_file.project_id)
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        # Roll back FIRST, before touching any ORM object -- the session's
+        # transaction is aborted at this point, and any attribute access
+        # on an object still bound to it (including this exact
+        # `uploaded_file` instance) would itself raise `PendingRollbackError`
+        # rather than the real error. Only a freshly-reloaded object, keyed
+        # by the plain UUID captured at the top of this function, is safe
+        # to write to afterward.
+        db.rollback()
+        failed_file = db.get(UploadedFile, uploaded_file_id)
+        if failed_file is not None:
+            failed_file.status = UploadedFileStatus.FAILED
+            failed_file.row_count = 0
+            failed_file.valid_row_count = 0
+            failed_file.invalid_row_count = 0
+            failed_file.duplicate_row_count = 0
+            failed_file.error_message = _safe_import_error_message(exc)
+            db.commit()
+        recompute_project_totals(db, project_id)
+        return
+
+    recompute_project_totals(db, project_id)
 
 
 def retry_import(db: Session, uploaded_file: UploadedFile) -> None:

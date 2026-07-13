@@ -1,0 +1,48 @@
+<div
+  id="delete-project-modal"
+  class="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4 hidden"
+  data-modal
+>
+  <div class="w-full max-w-md border border-line bg-paper shadow-xl">
+    <div class="flex items-center justify-between border-b border-line px-6 py-4">
+      <h2 class="font-display text-lg font-semibold text-ink">Delete project</h2>
+      <button type="button" class="text-ink/50 transition hover:text-ink" data-modal-close aria-label="Close">
+        &times;
+      </button>
+    </div>
+
+    <form method="post" action="/projects/{{ project.id }}/delete" class="space-y-5 px-6 py-6">
+      <p class="text-sm text-ink">
+        This will permanently delete <strong>"{{ project.name }}"</strong> and all of its
+        files, articles, classifications, narratives, and chat history. This cannot be undone.
+      </p>
+      <div>
+        <label class="msl-label" for="delete-confirm-input">
+          Type the project name to confirm
+        </label>
+        <input
+          id="delete-confirm-input"
+          name="confirm_name"
+          type="text"
+          autocomplete="off"
+          class="msl-input"
+          data-delete-confirm-input
+          data-expected-name="{{ project.name }}"
+        />
+      </div>
+      <div class="flex items-center justify-end gap-3 pt-2">
+        <button type="button" class="px-4 py-2 text-sm font-medium text-ink/60 transition hover:text-ink" data-modal-close>
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled
+          data-delete-confirm-submit
+          class="bg-accent px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Delete project
+        </button>
+      </div>
+    </form>
+  </div>
+</div>

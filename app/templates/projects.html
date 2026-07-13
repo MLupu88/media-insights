@@ -30,6 +30,22 @@
     </div>
   {% endif %}
 
+  {% if deleted_project_name %}
+    <div class="mt-8">
+      {{ alert("\"" ~ deleted_project_name ~ "\" was deleted.", "success") }}
+    </div>
+  {% endif %}
+  {% if cleanup_warning %}
+    <div class="mt-4">
+      {{ alert("The project's data was deleted, but its uploaded files could not be fully removed from storage. This has been logged for manual cleanup.", "error") }}
+    </div>
+  {% endif %}
+  {% if delete_error %}
+    <div class="mt-8">
+      {{ alert(delete_error, "error") }}
+    </div>
+  {% endif %}
+
   <div class="mt-10">
     {% if projects %}
       <div class="msl-panel">

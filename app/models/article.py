@@ -91,22 +91,31 @@ class Article(Base):
     original_row_number: Mapped[int] = mapped_column(Integer, nullable=False)
 
     retailer: Mapped[str] = mapped_column(String(64), nullable=False)
-    medium: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # `medium`/`source`/`sentiment_original`/`importance_original`/`author`/
+    # `county`/`subfolder_1`/`subfolder_2` are uncontrolled source-workbook
+    # text -- whatever a media-monitoring vendor put in that column, with no
+    # length guarantee. A bounded VARCHAR here is a silent-truncation/hard-
+    # failure trap waiting for the next workbook with a longer value (see the
+    # `author` field production incident this correction fixes). Text, like
+    # `title`/`subject`/`article_url`, has no practical length limit in
+    # Postgres and no indexing/performance cost difference from VARCHAR(n)
+    # for this app's access patterns (equality filters, no prefix indexing).
+    medium: Mapped[str | None] = mapped_column(Text, nullable=True)
     publication_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     article_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     mediatrust_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)
     subject: Mapped[str | None] = mapped_column(Text, nullable=True)
     audience: Mapped[float | None] = mapped_column(Float, nullable=True)
     ave: Mapped[float | None] = mapped_column(Float, nullable=True)
-    sentiment_original: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    importance_original: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    author: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    county: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    sentiment_original: Mapped[str | None] = mapped_column(Text, nullable=True)
+    importance_original: Mapped[str | None] = mapped_column(Text, nullable=True)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    county: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_audience: Mapped[float | None] = mapped_column(Float, nullable=True)
-    subfolder_1: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    subfolder_2: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    subfolder_1: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subfolder_2: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     raw_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)

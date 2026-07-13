@@ -16,7 +16,16 @@
       <h1 class="font-display text-4xl font-semibold text-ink">{{ project.name }}</h1>
       <p class="mt-2 text-sm text-ink/60">{{ project.quarter }}{% if project.description %} · {{ project.description }}{% endif %}</p>
     </div>
-    {{ status_badge(project.status) }}
+    <div class="flex items-center gap-4">
+      {{ status_badge(project.status) }}
+      <button
+        type="button"
+        data-modal-open="delete-project-modal"
+        class="text-sm font-medium text-ink/40 underline transition hover:text-accent"
+      >
+        Delete project
+      </button>
+    </div>
   </div>
 
   <nav class="mt-8 flex gap-8 border-b border-line">
@@ -702,6 +711,8 @@
     {% endif %}
   </div>
 </div>
+
+{% include "components/delete_project_modal.html" %}
 {% endblock %}
 
 {% block scripts %}
