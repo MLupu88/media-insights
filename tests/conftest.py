@@ -190,3 +190,27 @@ def classification_factory(db_session):
         return classification
 
     return _create
+
+
+@pytest.fixture
+def uploaded_file_factory(db_session):
+    import uuid
+
+    from app.models.uploaded_file import UploadedFile, UploadedFileStatus
+
+    def _create(project, **overrides):
+        defaults = dict(
+            project_id=project.id,
+            original_filename=f"file-{uuid.uuid4().hex[:8]}.xlsx",
+            stored_filename=f"{uuid.uuid4().hex}.xlsx",
+            stored_path=f"/tmp/{uuid.uuid4().hex}.xlsx",
+            status=UploadedFileStatus.COMPLETED,
+        )
+        defaults.update(overrides)
+        uploaded_file = UploadedFile(**defaults)
+        db_session.add(uploaded_file)
+        db_session.commit()
+        db_session.refresh(uploaded_file)
+        return uploaded_file
+
+    return _create

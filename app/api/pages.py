@@ -17,6 +17,8 @@ from app.services.classification import get_project_summary
 from app.services.comparison import ComparisonServiceError, get_period_comparison
 from app.services.narrative_service import get_project_narrative_generations
 from app.services.projects import create_project, list_projects
+from app.services.retailers import CANONICAL_RETAILERS
+from app.services.review import count_needs_review, get_review_groups
 
 router = APIRouter(dependencies=[Depends(require_web_session)])
 templates = Jinja2Templates(directory="app/templates")
@@ -63,12 +65,19 @@ def render_project_detail(
     classification_message: dict | None = None,
     narrative_message: dict | None = None,
     chat_message: dict | None = None,
+    review_message: dict | None = None,
     status_code: int = 200,
 ):
     uploaded_files = list(
         sorted(project.uploaded_files, key=lambda f: f.created_at, reverse=True)
     )
+    import_batches = list(project.import_batches)
     classification_summary = get_project_summary(db, project)
+
+    # Computed on every render (not just when the Review tab is active) so
+    # the tab's badge count is always accurate regardless of which tab the
+    # page is currently showing.
+    needs_review_count = count_needs_review(db, project.id)
 
     analytics_summary = None
     if active_tab == "analytics":
@@ -84,12 +93,17 @@ def render_project_detail(
     if active_tab == "chat":
         chat_session = get_project_own_chat_session(db, project.id)
 
+    review_groups = None
+    if active_tab == "review":
+        review_groups = get_review_groups(db, project.id)
+
     return render(
         request,
         "project_detail.html",
         {
             "project": project,
             "uploaded_files": uploaded_files,
+            "import_batches": import_batches,
             "active_tab": active_tab,
             "upload_results": upload_results or [],
             "classification_summary": classification_summary,
@@ -99,6 +113,10 @@ def render_project_detail(
             "narrative_message": narrative_message,
             "chat_session": chat_session,
             "chat_message": chat_message,
+            "review_groups": review_groups,
+            "review_message": review_message,
+            "needs_review_count": needs_review_count,
+            "canonical_retailers": CANONICAL_RETAILERS,
         },
         status_code=status_code,
     )
@@ -171,7 +189,7 @@ def project_detail_page(
         )
     active_tab = (
         tab
-        if tab in ("overview", "files", "classification", "analytics", "insights", "chat")
+        if tab in ("overview", "files", "classification", "review", "analytics", "insights", "chat")
         else "overview"
     )
     return render_project_detail(request, db, project, active_tab=active_tab)

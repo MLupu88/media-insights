@@ -1,4 +1,5 @@
 {% from "components/macros.html" import status_badge %}
+{% from "components/review_macros.html" import trusted_mapping_control %}
 
 <div class="border-b border-line px-6 py-5 last:border-b-0">
   <div class="grid grid-cols-1 gap-3 sm:grid-cols-12 sm:items-center sm:gap-4">
@@ -39,4 +40,8 @@
       {{ uploaded_file.error_message }}
     </p>
   {% endif %}
+
+  <div class="mt-3 border-t border-line pt-3">
+    {{ trusted_mapping_control(uploaded_file, canonical_retailers) }}
+  </div>
 </div>

@@ -45,3 +45,64 @@ document.addEventListener("keydown", (event) => {
     });
   }
 });
+
+// Multi-file upload dropzone: progressive enhancement only. The real
+// `<input type="file" multiple>` inside the dropzone stays fully
+// functional without any of this — drag-and-drop just populates that
+// same input, and the form still submits natively (full page reload),
+// never XHR. No fake progress percentage is ever shown, since the import
+// itself is synchronous and there is nothing real to measure — only an
+// honest "Processing files…" state once the request is underway.
+document.querySelectorAll("[data-upload-dropzone]").forEach((dropzone) => {
+  const input = dropzone.querySelector('input[type="file"]');
+  const fileList = dropzone.querySelector("[data-selected-files]");
+  const submitButton = dropzone.querySelector("[data-upload-submit]");
+  if (!input) return;
+
+  function renderSelectedFiles() {
+    if (!fileList) return;
+    const files = Array.from(input.files || []);
+    fileList.innerHTML = "";
+    if (!files.length) {
+      fileList.classList.add("hidden");
+      return;
+    }
+    files.forEach((file) => {
+      const item = document.createElement("li");
+      item.textContent = file.name;
+      fileList.appendChild(item);
+    });
+    fileList.classList.remove("hidden");
+  }
+
+  input.addEventListener("change", renderSelectedFiles);
+
+  ["dragenter", "dragover"].forEach((eventName) => {
+    dropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      dropzone.classList.add("border-accent");
+    });
+  });
+
+  ["dragleave", "drop"].forEach((eventName) => {
+    dropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      dropzone.classList.remove("border-accent");
+    });
+  });
+
+  dropzone.addEventListener("drop", (event) => {
+    const dropped = event.dataTransfer && event.dataTransfer.files;
+    if (dropped && dropped.length) {
+      input.files = dropped;
+      renderSelectedFiles();
+    }
+  });
+
+  dropzone.addEventListener("submit", () => {
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Processing files…";
+    }
+  });
+});

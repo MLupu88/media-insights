@@ -27,6 +27,7 @@
     "queued": "Queued",
     "running": "Running",
     "partially_complete": "Partially complete",
+    "partially_completed": "Partially completed",
   } %}
   <span class="inline-flex items-center gap-1.5 border border-line px-2.5 py-1 text-xs font-medium uppercase tracking-wide text-ink/70">
     <span class="h-1.5 w-1.5 rounded-full {% if status in ('failed',) %}bg-accent{% elif status in ('analyzed', 'complete', 'completed') %}bg-ink{% else %}bg-ink/30{% endif %}"></span>

@@ -8,15 +8,14 @@ from app.models.article import Article, ImportStatus, RetailerReviewStatus
 from app.models.import_batch import ImportBatch, ImportBatchStatus
 from app.models.project import Project, ProjectStatus
 from app.models.uploaded_file import UploadedFile, UploadedFileStatus
+from app.services.dedup import lock_project_for_dedup, order_by_canonical
 from app.services.excel_parser import ParserError, parse_workbook
 from app.services.retailers import assign_retailer
 
 
 def _load_seen_fingerprints(db: Session, project_id: uuid.UUID) -> dict[str, uuid.UUID]:
-    stmt = (
-        select(Article.fingerprint, Article.id)
-        .where(Article.project_id == project_id)
-        .order_by(Article.created_at.asc(), Article.id.asc())
+    stmt = order_by_canonical(
+        select(Article.fingerprint, Article.id).where(Article.project_id == project_id)
     )
     seen: dict[str, uuid.UUID] = {}
     for fingerprint, article_id in db.execute(stmt):
@@ -24,7 +23,7 @@ def _load_seen_fingerprints(db: Session, project_id: uuid.UUID) -> dict[str, uui
     return seen
 
 
-def recompute_project_totals(db: Session, project_id: uuid.UUID) -> None:
+def recompute_project_totals(db: Session, project_id: uuid.UUID, commit: bool = True) -> None:
     totals = db.execute(
         select(
             func.count(UploadedFile.id),
@@ -49,7 +48,8 @@ def recompute_project_totals(db: Session, project_id: uuid.UUID) -> None:
     if total_files > 0 and project.status == ProjectStatus.CREATED:
         project.status = ProjectStatus.IMPORTED
 
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def import_uploaded_file(db: Session, uploaded_file: UploadedFile) -> None:
@@ -76,6 +76,12 @@ def import_uploaded_file(db: Session, uploaded_file: UploadedFile) -> None:
         db.commit()
         recompute_project_totals(db, uploaded_file.project_id)
         return
+
+    # Held from here through the commit below — the same project-scoped
+    # lock a Review correction acquires (app/services/dedup.py) — so an
+    # import and a concurrent correction can never race to create two
+    # canonicals for the same fingerprint.
+    lock_project_for_dedup(db, uploaded_file.project_id)
 
     seen_fingerprints = _load_seen_fingerprints(db, uploaded_file.project_id)
 
