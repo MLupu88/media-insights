@@ -565,6 +565,10 @@ def process_answer(db: Session, run: ChatRun, submission: AnswerSubmission) -> A
     result = validate_answer(submission, run.answer_payload_snapshot)
     if not result.valid:
         return _fail_answer(db, run, request_hash, submission, result.reason)
+    if result.canonical_related_brand:
+        submission = submission.model_copy(
+            update={"related_brand": result.canonical_related_brand}
+        )
 
     message = ChatMessage(
         session_id=run.session_id,

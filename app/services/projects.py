@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.project import Project
@@ -31,27 +31,33 @@ def create_project(db: Session, data: ProjectCreate) -> Project:
 
 
 def delete_project(db: Session, project: Project) -> bool:
-    """Deletes the project and every related record via the existing ORM
-    cascade relationships (`Project.uploaded_files`/`import_batches`/
-    `articles`/`classification_batches`/`classifications`/
-    `narrative_generations`/`chat_sessions`, each already `cascade="all,
-    delete-orphan"`, cascading further into e.g. `NarrativeInsight`/
-    `ChatMessage`/`ChatRun`) -- no new deletion logic, only the
-    relationships this model already declares.
+    """Delete a project with one database-level cascade operation.
 
-    The project's upload directory is removed afterward, database-delete
-    first: if directory removal fails, the project's data is already gone
-    from the database (the correct, safe outcome — an orphaned directory
-    is just wasted disk space, cleanable later; the reverse order would
-    risk deleting files while dangling DB rows still reference them).
+    Every project-owned foreign key is declared with ``ON DELETE CASCADE``.
+    Issuing a SQL ``DELETE`` directly against ``projects`` lets PostgreSQL
+    remove articles, classifications, batches, narratives and chat records
+    without SQLAlchemy loading tens of thousands of child objects into memory.
+    This is the critical difference between a quick delete and the previous
+    ORM cascade, which could exceed the reverse proxy timeout for large
+    projects.
 
-    Returns True if the filesystem cleanup also succeeded, False if the
-    database deletion succeeded but the directory could not be removed —
-    logged here, never raised, and never exposing the server path to the
-    caller.
+    The upload directory is removed only after the database transaction has
+    committed. A filesystem failure is logged and reported as a cleanup warning,
+    while the database deletion remains successful.
     """
     project_id = project.id
-    db.delete(project)
+
+    # The route loaded this row only to validate the confirmation name. Detach
+    # it before the bulk statement so the session cannot attempt ORM cascades
+    # or later expire a row that no longer exists.
+    if project in db:
+        db.expunge(project)
+
+    db.execute(
+        delete(Project)
+        .where(Project.id == project_id)
+        .execution_options(synchronize_session=False)
+    )
     db.commit()
 
     try:

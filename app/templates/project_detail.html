@@ -99,12 +99,43 @@
       {% endfor %}
     </div>
 
-    <div class="mt-10 border border-dashed border-line px-8 py-16 text-center">
-      <p class="font-display text-xl text-ink">Article review and insights coming soon</p>
-      <p class="mx-auto mt-2 max-w-sm text-sm text-ink/60">
-        Article review, narrative insights and exports for this project will appear here in a
-        later phase.
-      </p>
+    <div class="mt-10 border border-line px-8 py-12 text-center">
+      {% if project.total_files == 0 %}
+        <p class="font-display text-xl text-ink">Import data to begin</p>
+        <p class="mx-auto mt-2 max-w-lg text-sm text-ink/60">
+          Add a media-monitoring workbook to create the article set for this project.
+        </p>
+        <a href="/projects/{{ project.id }}?tab=files" class="mt-6 inline-block border border-ink bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent hover:border-accent">
+          Upload files
+        </a>
+      {% elif project.valid_rows == 0 %}
+        <p class="font-display text-xl text-ink">No valid articles are available</p>
+        <p class="mx-auto mt-2 max-w-lg text-sm text-ink/60">
+          Review the imported files and validation results before continuing to classification.
+        </p>
+        <a href="/projects/{{ project.id }}?tab=files" class="mt-6 inline-block border border-ink px-5 py-2.5 text-sm font-medium text-ink transition hover:border-accent hover:text-accent">
+          Review files
+        </a>
+      {% elif project.classified_rows < project.valid_rows %}
+        <p class="font-display text-xl text-ink">Classification is the next step</p>
+        <p class="mx-auto mt-2 max-w-lg text-sm text-ink/60">
+          {{ project.classified_rows }} of {{ project.valid_rows }} valid articles are classified. Complete classification to unlock grounded analytics, insights and chat.
+        </p>
+        <a href="/projects/{{ project.id }}?tab=classification" class="mt-6 inline-block border border-ink bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent hover:border-accent">
+          Open classification
+        </a>
+      {% else %}
+        <p class="font-display text-xl text-ink">Project ready for analysis</p>
+        <p class="mx-auto mt-2 max-w-lg text-sm text-ink/60">
+          All {{ project.valid_rows }} valid article{% if project.valid_rows != 1 %}s are{% else %} is{% endif %} classified. Review the labels, explore performance, generate narrative insights or ask a grounded question.
+        </p>
+        <div class="mt-6 flex flex-wrap justify-center gap-3">
+          <a href="/projects/{{ project.id }}?tab=classification" class="border border-line px-4 py-2 text-sm font-medium text-ink transition hover:border-accent hover:text-accent">View classifications</a>
+          <a href="/projects/{{ project.id }}?tab=analytics" class="border border-line px-4 py-2 text-sm font-medium text-ink transition hover:border-accent hover:text-accent">Open analytics</a>
+          <a href="/projects/{{ project.id }}?tab=insights" class="border border-line px-4 py-2 text-sm font-medium text-ink transition hover:border-accent hover:text-accent">Generate insights</a>
+          <a href="/projects/{{ project.id }}?tab=chat" class="border border-ink bg-ink px-4 py-2 text-sm font-medium text-paper transition hover:bg-accent hover:border-accent">Open chat</a>
+        </div>
+      {% endif %}
     </div>
   </div>
 

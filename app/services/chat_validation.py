@@ -39,6 +39,7 @@ from dataclasses import dataclass
 
 from app.schemas.chat import AnswerSubmission, ChatEvidenceReference
 from app.services.chat_contract import CAUSAL_LANGUAGE_MARKERS, AnswerType
+from app.services.entity_resolution import resolve_unique_entity_alias
 from app.services.narrative_validation import (
     NUMERIC_TOLERANCE,
     PathResolutionError,
@@ -56,6 +57,7 @@ _PP_MARKER_RE = re.compile(r"^\s*(pp\b|punct procentual|puncte procentuale)", re
 class ChatValidationResult:
     valid: bool
     reason: str | None = None
+    canonical_related_brand: str | None = None
 
 
 # --- Scanning tool_results for grounding pools ---------------------------------
@@ -271,8 +273,13 @@ def validate_answer(
             )
 
     available = _scan_available_entities(tool_results)
-    if submission.related_brand and submission.related_brand not in available["brands"]:
-        return ChatValidationResult(False, f"Unknown brand: {submission.related_brand!r}.")
+    canonical_related_brand = None
+    if submission.related_brand:
+        canonical_related_brand = resolve_unique_entity_alias(
+            submission.related_brand, available["brands"]
+        )
+        if canonical_related_brand is None:
+            return ChatValidationResult(False, f"Unknown brand: {submission.related_brand!r}.")
     if submission.related_topic and submission.related_topic not in available["topics"]:
         return ChatValidationResult(False, f"Unknown topic: {submission.related_topic!r}.")
     if (
@@ -310,4 +317,4 @@ def validate_answer(
     if answer_type_error:
         return ChatValidationResult(False, answer_type_error)
 
-    return ChatValidationResult(True)
+    return ChatValidationResult(True, canonical_related_brand=canonical_related_brand)

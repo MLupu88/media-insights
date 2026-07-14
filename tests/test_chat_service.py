@@ -258,6 +258,27 @@ def test_valid_answer_creates_assistant_message(db_session, project_factory, art
     assert [m.role for m in messages] == ["user", "assistant"]
 
 
+def test_brand_alias_is_canonicalized_in_plan_and_persisted_on_answer(
+    db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Penny / Rewe")
+    session = find_or_create_project_session(db_session, project)
+    run = create_run(db_session, session, "Ce actiune de PR ar trebui pentru Penny?")
+
+    plan_outcome = process_plan(db_session, run, _plan(run, brand="Penny"))
+    assert plan_outcome.http_status == 200
+    assert plan_outcome.tool_results[0]["requested_brand"]["brand"] == "Penny / Rewe"
+    sov = plan_outcome.tool_results[0]["requested_brand"]["sov_pct"]
+
+    answer = _valid_answer(run, sov, brand="Penny")
+    outcome = process_answer(db_session, run, answer)
+
+    assert outcome.http_status == 200
+    assert run.status == "complete"
+    assert run.related_brand == "Penny / Rewe"
+
+
 def test_rejected_answer_does_not_create_assistant_message(
     db_session, project_factory, article_factory
 ):
