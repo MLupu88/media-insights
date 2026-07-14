@@ -222,7 +222,8 @@ def test_ask_project_chat_success(mock_post, authenticated_client, db_session, p
     assert "test-internal-secret" not in response.text
     assert mock_post.called
     _, kwargs = mock_post.call_args
-    assert "secret" in kwargs["json"]
+    assert "secret" not in kwargs["json"]
+    assert kwargs["headers"] == {"x-internal-secret": "test-internal-secret"}
 
 
 @patch("app.services.n8n.httpx.post")

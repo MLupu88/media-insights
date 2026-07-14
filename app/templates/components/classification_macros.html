@@ -1,0 +1,228 @@
+{# Classification Results & Review components.
+   `low_confidence_threshold` and `classification_taxonomy` are Jinja
+   environment globals (registered in app/api/pages.py), available in
+   every macro here without being threaded through as parameters. #}
+
+{% macro _sentiment_dot(sentiment) -%}
+  <span class="h-1.5 w-1.5 rounded-full {% if sentiment == 'negative' %}bg-accent{% elif sentiment == 'positive' %}bg-ink{% else %}bg-ink/30{% endif %}"></span>
+{%- endmacro %}
+
+{% macro confidence_cell(classification) -%}
+  <div class="flex items-center gap-1.5">
+    <span class="font-medium text-ink">{{ (classification.confidence * 100) | round(0) | int }}%</span>
+  </div>
+  <div class="mt-1 flex flex-wrap gap-1">
+    {% if classification.confidence < low_confidence_threshold %}
+      <span class="border border-accent/40 bg-accent/5 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent">Low confidence</span>
+    {% endif %}
+    {% if classification.review_status in ("approved", "corrected") %}
+      <span class="border border-line px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-ink/60">Reviewed</span>
+    {% endif %}
+  </div>
+{%- endmacro %}
+
+{% macro pagination_controls(project, page, query_params, page_param, tab) -%}
+  <div class="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 text-xs text-ink/60">
+    <span>
+      Page {{ page.page }} of {{ page.total_pages }} ({{ page.total_count }} row{% if page.total_count != 1 %}s{% endif %})
+    </span>
+    <div class="flex gap-2">
+      {% if page.page > 1 %}
+        <a href="{{ pagination_url(project.id, query_params, tab, page_param, page.page - 1) }}" class="border border-line px-3 py-1.5 font-medium text-ink transition hover:border-accent hover:text-accent">
+          ← Previous
+        </a>
+      {% endif %}
+      {% if page.page < page.total_pages %}
+        <a href="{{ pagination_url(project.id, query_params, tab, page_param, page.page + 1) }}" class="border border-line px-3 py-1.5 font-medium text-ink transition hover:border-accent hover:text-accent">
+          Next →
+        </a>
+      {% endif %}
+    </div>
+  </div>
+{%- endmacro %}
+
+{% macro classification_results_table(project, page, results_query_params) -%}
+<div class="msl-panel overflow-x-auto">
+  <table class="w-full min-w-[1500px] text-left text-sm">
+    <thead>
+      <tr class="border-b border-line text-xs uppercase tracking-wide text-ink/50">
+        <th class="px-4 py-3 font-medium">Date</th>
+        <th class="px-4 py-3 font-medium">Brand</th>
+        <th class="px-4 py-3 font-medium">Article title</th>
+        <th class="px-4 py-3 font-medium">Publication</th>
+        <th class="px-4 py-3 font-medium">Reach</th>
+        <th class="px-4 py-3 font-medium">Primary topic</th>
+        <th class="px-4 py-3 font-medium">Secondary topic</th>
+        <th class="px-4 py-3 font-medium">Communication category</th>
+        <th class="px-4 py-3 font-medium">Sentiment</th>
+        <th class="px-4 py-3 font-medium">Brand role</th>
+        <th class="px-4 py-3 font-medium">Confidence</th>
+        <th class="px-4 py-3 font-medium">Story key</th>
+        <th class="px-4 py-3 font-medium">Review status</th>
+        <th class="px-4 py-3 font-medium">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for article, classification in page.rows %}
+        <tr class="border-b border-line last:border-b-0 align-top">
+          <td class="px-4 py-3 whitespace-nowrap">{{ article.publication_date.strftime("%d %b %Y") if article.publication_date else "—" }}</td>
+          <td class="px-4 py-3 font-medium text-ink">{{ article.retailer }}</td>
+          <td class="px-4 py-3 max-w-xs">
+            {% if article.article_url %}
+              <a href="{{ article.article_url }}" target="_blank" rel="noopener noreferrer" class="font-medium text-ink underline decoration-ink/30 transition hover:text-accent hover:decoration-accent" title="{{ article.title or '—' }}">
+                {{ article.title or "—" }}
+              </a>
+            {% else %}
+              <span class="font-medium text-ink" title="{{ article.title or '—' }}">{{ article.title or "—" }}</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">{{ article.source or "—" }}</td>
+          <td class="px-4 py-3">{{ article.audience | number }}</td>
+          <td class="px-4 py-3">{{ classification.primary_topic | primary_topic_label }}</td>
+          <td class="px-4 py-3">{{ classification.secondary_topic | primary_topic_label if classification.secondary_topic else "—" }}</td>
+          <td class="px-4 py-3">{{ classification.communication_category | communication_category_label }}</td>
+          <td class="px-4 py-3">
+            <span class="inline-flex items-center gap-1.5">
+              {{ _sentiment_dot(classification.sentiment) }}
+              {{ classification.sentiment | sentiment_label }}
+            </span>
+          </td>
+          <td class="px-4 py-3">{{ classification.brand_role | brand_role_label }}</td>
+          <td class="px-4 py-3">{{ confidence_cell(classification) }}</td>
+          <td class="px-4 py-3 max-w-[160px] truncate" title="{{ classification.story_key or '' }}">{{ classification.story_key or "—" }}</td>
+          <td class="px-4 py-3">{{ classification.review_status | review_status_label }}</td>
+          <td class="px-4 py-3">
+            {% if classification.rationale_ro %}
+              <details>
+                <summary class="cursor-pointer text-xs font-medium text-ink/60 underline transition hover:text-accent">View reasoning</summary>
+                <p class="mt-2 max-w-xs text-xs text-ink/70">{{ classification.rationale_ro }}</p>
+              </details>
+            {% else %}
+              <span class="text-xs text-ink/30">—</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {{ pagination_controls(project, page, results_query_params, "results_page", "classification") }}
+</div>
+{%- endmacro %}
+
+{% macro classification_review_row(project, article, classification) -%}
+{% set edit_id = "correct-" ~ classification.id %}
+<div class="px-6 py-4 text-sm">
+  <div class="flex flex-wrap items-start gap-4">
+    <input type="checkbox" name="classification_ids" value="{{ classification.id }}" form="bulk-approve-form" class="mt-1 h-4 w-4 shrink-0" />
+
+    <div class="min-w-[220px] flex-1">
+      <p class="font-medium text-ink" title="{{ article.title or '—' }}">{{ article.title or "—" }}</p>
+      <p class="mt-1 text-xs text-ink/50">
+        {{ article.source or "—" }} ·
+        {{ article.publication_date.strftime("%d %b %Y") if article.publication_date else "—" }} ·
+        Reach {{ article.audience | number }}
+      </p>
+      <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink/70">
+        <span>Topic: {{ classification.primary_topic | primary_topic_label }}{% if classification.secondary_topic %} / {{ classification.secondary_topic | primary_topic_label }}{% endif %}</span>
+        <span>Category: {{ classification.communication_category | communication_category_label }}</span>
+        <span class="inline-flex items-center gap-1.5">Sentiment: {{ _sentiment_dot(classification.sentiment) }} {{ classification.sentiment | sentiment_label }}</span>
+        <span>Role: {{ classification.brand_role | brand_role_label }}</span>
+        {% if classification.story_key %}<span>Story: {{ classification.story_key }}</span>{% endif %}
+      </div>
+      {% if classification.rationale_ro %}
+        <details class="mt-2">
+          <summary class="cursor-pointer text-xs font-medium text-ink/60 underline transition hover:text-accent">View reasoning</summary>
+          <p class="mt-1 max-w-md text-xs text-ink/70">{{ classification.rationale_ro }}</p>
+        </details>
+      {% endif %}
+    </div>
+
+    <div class="shrink-0 text-right">
+      {{ confidence_cell(classification) }}
+    </div>
+
+    <div class="flex shrink-0 flex-col items-end gap-2">
+      <form action="/projects/{{ project.id }}/classifications/{{ classification.id }}/approve" method="post">
+        <button type="submit" class="border border-ink px-3 py-1.5 text-xs font-medium text-ink transition hover:border-accent hover:text-accent">
+          Approve
+        </button>
+      </form>
+      <details>
+        <summary class="cursor-pointer text-xs font-medium text-ink/60 underline transition hover:text-accent">Edit classification</summary>
+        <form action="/projects/{{ project.id }}/classifications/{{ classification.id }}/correct" method="post" class="mt-2 w-72 space-y-2 border border-line bg-paper p-3">
+          <div>
+            <label class="msl-label" for="{{ edit_id }}-primary-topic">Primary topic</label>
+            <select id="{{ edit_id }}-primary-topic" name="primary_topic" class="msl-input py-1 text-xs" required>
+              {% for topic in classification_taxonomy.primary_topics %}
+                <option value="{{ topic }}" {% if classification.primary_topic == topic %}selected{% endif %}>{{ topic | primary_topic_label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="msl-label" for="{{ edit_id }}-secondary-topic">Secondary topic</label>
+            <select id="{{ edit_id }}-secondary-topic" name="secondary_topic" class="msl-input py-1 text-xs">
+              <option value="">None</option>
+              {% for topic in classification_taxonomy.primary_topics %}
+                <option value="{{ topic }}" {% if classification.secondary_topic == topic %}selected{% endif %}>{{ topic | primary_topic_label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="msl-label" for="{{ edit_id }}-category">Communication category</label>
+            <select id="{{ edit_id }}-category" name="communication_category" class="msl-input py-1 text-xs" required>
+              {% for category in classification_taxonomy.communication_categories %}
+                <option value="{{ category }}" {% if classification.communication_category == category %}selected{% endif %}>{{ category | communication_category_label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="msl-label" for="{{ edit_id }}-sentiment">Sentiment</label>
+            <select id="{{ edit_id }}-sentiment" name="sentiment" class="msl-input py-1 text-xs" required>
+              {% for sentiment in classification_taxonomy.sentiments %}
+                <option value="{{ sentiment }}" {% if classification.sentiment == sentiment %}selected{% endif %}>{{ sentiment | sentiment_label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="msl-label" for="{{ edit_id }}-brand-role">Brand role</label>
+            <select id="{{ edit_id }}-brand-role" name="brand_role" class="msl-input py-1 text-xs" required>
+              {% for role in classification_taxonomy.brand_roles %}
+                <option value="{{ role }}" {% if classification.brand_role == role %}selected{% endif %}>{{ role | brand_role_label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="msl-label" for="{{ edit_id }}-story-key">Story key</label>
+            <input id="{{ edit_id }}-story-key" type="text" name="story_key" value="{{ classification.story_key or '' }}" class="msl-input py-1 text-xs" />
+          </div>
+          <p class="text-[11px] text-ink/40">Confidence ({{ (classification.confidence * 100) | round(0) | int }}%) and the original AI reasoning are read-only.</p>
+          <button type="submit" class="w-full bg-ink px-3 py-1.5 text-xs font-medium text-paper transition hover:bg-accent">
+            Save correction
+          </button>
+        </form>
+      </details>
+    </div>
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro classification_review_queue(project, review_page) -%}
+<form id="bulk-approve-form" action="/projects/{{ project.id }}/classifications/bulk-approve" method="post"></form>
+<div class="msl-panel">
+  <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4">
+    <label class="flex items-center gap-2 text-xs font-medium text-ink/60">
+      <input type="checkbox" data-select-all="classification_ids" class="h-4 w-4" />
+      Select all visible
+    </label>
+    <button type="submit" form="bulk-approve-form" class="border border-ink px-4 py-2 text-xs font-medium text-ink transition hover:border-accent hover:text-accent">
+      Approve selected
+    </button>
+  </div>
+  <div class="divide-y divide-line">
+    {% for article, classification in review_page.rows %}
+      {{ classification_review_row(project, article, classification) }}
+    {% endfor %}
+  </div>
+</div>
+{{ pagination_controls(project, review_page, {}, "review_page", "review") }}
+{%- endmacro %}

@@ -12,11 +12,31 @@ from app.models.classification import (
     ClassificationBatch,
     ClassificationBatchArticle,
     ClassificationBatchStatus,
+    ClassificationReviewStatus,
 )
 from app.models.project import AnalysisStatus, Project
 from app.schemas.classification import BulkClassificationRequest
 
 FAILURE_MESSAGE_MAX_LENGTH = 500
+
+
+def initial_review_status(confidence: float) -> str:
+    """The review_status a freshly-produced classification starts at.
+
+    Low-confidence output needs a human look (PENDING, enters the
+    Classification Review queue); confident output is auto-approved so the
+    queue only ever holds what genuinely needs attention -- not all
+    30,000+ classifications in a large project. A human can still act on an
+    auto-approved row at any time (Edit -> CORRECTED); moving an approved
+    row back to PENDING is deliberately not done here -- that is reserved
+    for a dedicated "flag for review" action if one is ever added, not an
+    automatic side effect of confidence alone.
+    """
+    return (
+        ClassificationReviewStatus.PENDING
+        if confidence < LOW_CONFIDENCE_THRESHOLD
+        else ClassificationReviewStatus.APPROVED
+    )
 
 
 class ClassificationServiceError(Exception):
@@ -364,6 +384,7 @@ def save_classifications_bulk(
                     rationale_ro=result.rationale_ro,
                     model=request.model,
                     prompt_version=request.prompt_version,
+                    review_status=initial_review_status(result.confidence),
                 )
             )
             saved_count += 1

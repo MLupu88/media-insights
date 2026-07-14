@@ -37,7 +37,6 @@ def trigger_classification(project_id: uuid.UUID) -> None:
 def trigger_narrative_generation(generation_id: uuid.UUID, project_id: uuid.UUID) -> None:
     settings = get_settings()
     payload = {
-        "secret": settings.media_app_internal_secret,
         "generation_id": str(generation_id),
         "project_id": str(project_id),
     }
@@ -46,6 +45,7 @@ def trigger_narrative_generation(generation_id: uuid.UUID, project_id: uuid.UUID
         response = httpx.post(
             settings.n8n_narrative_webhook_url,
             json=payload,
+            headers={"x-internal-secret": settings.media_app_internal_secret},
             timeout=settings.n8n_request_timeout_seconds,
         )
     except httpx.TimeoutException as exc:
@@ -65,7 +65,6 @@ def trigger_narrative_generation(generation_id: uuid.UUID, project_id: uuid.UUID
 def trigger_chat_run(run_id: uuid.UUID, session_id: uuid.UUID) -> None:
     settings = get_settings()
     payload = {
-        "secret": settings.media_app_internal_secret,
         "run_id": str(run_id),
         "session_id": str(session_id),
     }
@@ -74,6 +73,7 @@ def trigger_chat_run(run_id: uuid.UUID, session_id: uuid.UUID) -> None:
         response = httpx.post(
             settings.n8n_chat_webhook_url,
             json=payload,
+            headers={"x-internal-secret": settings.media_app_internal_secret},
             timeout=settings.n8n_request_timeout_seconds,
         )
     except httpx.TimeoutException as exc:

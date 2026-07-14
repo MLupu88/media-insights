@@ -185,6 +185,7 @@ def classification_factory(db_session):
     import uuid
 
     from app.models.classification import Classification
+    from app.services.classification import initial_review_status
 
     def _create(article, **overrides):
         defaults = dict(
@@ -202,6 +203,10 @@ def classification_factory(db_session):
             prompt_version="retail-deepseek-v2",
         )
         defaults.update(overrides)
+        # Mirrors the real save path (app.services.classification
+        # .save_classifications_bulk): review_status derives from
+        # confidence unless the test explicitly overrides it.
+        defaults.setdefault("review_status", initial_review_status(defaults["confidence"]))
         classification = Classification(**defaults)
         db_session.add(classification)
         db_session.commit()

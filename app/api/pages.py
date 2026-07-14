@@ -9,6 +9,11 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.classification import (
+    LOW_CONFIDENCE_THRESHOLD,
+    ClassificationReviewStatus,
+    ClassificationTaxonomy,
+)
 from app.models.project import Project
 from app.schemas.project import ProjectCreate
 from app.security.auth import require_web_session
@@ -23,6 +28,21 @@ from app.services.analytics import (
 from app.services.analytics_filters import extract_prefixed_filter_params
 from app.services.chat_service import find_comparison_session, get_project_own_chat_session
 from app.services.classification import get_project_summary
+from app.services.classification_labels import (
+    BRAND_ROLE_LABELS,
+    COMMUNICATION_CATEGORY_LABELS,
+    PRIMARY_TOPIC_LABELS,
+    REVIEW_STATUS_LABELS,
+    SENTIMENT_LABELS,
+    humanize_taxonomy_value,
+)
+from app.services.classification_results import (
+    ClassificationResultsFilterError,
+    ClassificationResultsQuery,
+    get_classification_review_queue,
+    list_classification_results,
+    parse_classification_results_query,
+)
 from app.services.comparison import ComparisonServiceError, get_period_comparison
 from app.services.narrative_service import get_project_narrative_generations
 from app.services.projects import create_project, delete_project, list_projects
@@ -31,6 +51,44 @@ from app.services.review import count_needs_review, get_review_groups
 
 router = APIRouter(dependencies=[Depends(require_web_session)])
 templates = Jinja2Templates(directory="app/templates")
+
+
+def _extract_prefixed_params(query_params, prefix: str) -> dict:
+    """Plain-dict view of every single-valued query param starting with
+    `prefix`, prefix stripped -- e.g. results_primary_topic=X becomes
+    {"primary_topic": "X"}. Distinct prefixes (results_/review_) keep the
+    Classification tab's table filters and the Review tab's queue paging
+    from ever colliding with each other or with unrelated params sharing a
+    plain name like `primary_topic` (already used by the Analytics tab).
+    """
+    result: dict = {}
+    for key in query_params.keys():
+        if key.startswith(prefix):
+            result[key[len(prefix):]] = query_params.get(key)
+    return result
+
+
+templates.env.filters["primary_topic_label"] = lambda v: humanize_taxonomy_value(
+    v, PRIMARY_TOPIC_LABELS
+)
+templates.env.filters["communication_category_label"] = lambda v: humanize_taxonomy_value(
+    v, COMMUNICATION_CATEGORY_LABELS
+)
+templates.env.filters["sentiment_label"] = lambda v: humanize_taxonomy_value(v, SENTIMENT_LABELS)
+templates.env.filters["brand_role_label"] = lambda v: humanize_taxonomy_value(v, BRAND_ROLE_LABELS)
+templates.env.filters["review_status_label"] = lambda v: humanize_taxonomy_value(
+    v, REVIEW_STATUS_LABELS
+)
+
+templates.env.globals["low_confidence_threshold"] = LOW_CONFIDENCE_THRESHOLD
+
+templates.env.globals["classification_taxonomy"] = {
+    "primary_topics": ClassificationTaxonomy.PRIMARY_TOPICS,
+    "communication_categories": ClassificationTaxonomy.COMMUNICATION_CATEGORIES,
+    "sentiments": ClassificationTaxonomy.SENTIMENTS,
+    "brand_roles": ClassificationTaxonomy.BRAND_ROLES,
+    "review_statuses": ClassificationReviewStatus.ALL,
+}
 
 
 def _format_number(value) -> str:
@@ -54,6 +112,19 @@ def build_query_string(params: dict) -> str:
 
 
 templates.env.globals["build_query_string"] = build_query_string
+
+
+def pagination_url(project_id, query_params: dict, tab: str, page_param: str, page_number: int) -> str:
+    """Builds a pagination link's full URL in Python -- Jinja's dict
+    literal syntax does not support Python's `**` unpacking (`{**a, 'k':
+    v}` is a Jinja TemplateSyntaxError), so this merge cannot be done
+    inline in the template.
+    """
+    merged = {**query_params, "tab": tab, page_param: page_number}
+    return f"/projects/{project_id}?{build_query_string(merged)}"
+
+
+templates.env.globals["pagination_url"] = pagination_url
 
 
 def _build_analytics_filter_chips(
@@ -186,9 +257,50 @@ def render_project_detail(
     if active_tab == "chat":
         chat_session = get_project_own_chat_session(db, project.id)
 
+    classification_results = None
+    classification_results_query = None
+    results_query_params: dict = {}
+    if active_tab == "classification":
+        try:
+            classification_results_query = parse_classification_results_query(
+                _extract_prefixed_params(request.query_params, "results_")
+            )
+        except ClassificationResultsFilterError as exc:
+            classification_message = {"type": "error", "text": exc.message}
+            status_code = status.HTTP_400_BAD_REQUEST
+            # Fall back to an all-defaults query so the filter form/table
+            # section still renders (reset, with the error banner above)
+            # instead of crashing on a None query object.
+            classification_results_query = ClassificationResultsQuery()
+        else:
+            classification_results = list_classification_results(
+                db, project.id, classification_results_query
+            )
+            q = classification_results_query
+            results_query_params = {
+                "results_search": q.search,
+                "results_primary_topic": q.primary_topic,
+                "results_communication_category": q.communication_category,
+                "results_sentiment": q.sentiment,
+                "results_brand_role": q.brand_role,
+                "results_confidence": q.confidence_bucket,
+                "results_review_status": q.review_status,
+                "results_date_from": q.date_from.isoformat() if q.date_from else None,
+                "results_date_to": q.date_to.isoformat() if q.date_to else None,
+                "results_sort": q.sort,
+            }
+
     review_groups = None
+    classification_review_page = None
     if active_tab == "review":
         review_groups = get_review_groups(db, project.id)
+        try:
+            review_page_number = int(request.query_params.get("review_page", 1))
+        except (TypeError, ValueError):
+            review_page_number = 1
+        classification_review_page = get_classification_review_queue(
+            db, project.id, page=review_page_number
+        )
 
     return render(
         request,
@@ -212,6 +324,10 @@ def render_project_detail(
             "review_groups": review_groups,
             "review_message": review_message,
             "review_backlog_count": review_backlog_count,
+            "classification_results": classification_results,
+            "classification_results_query": classification_results_query,
+            "results_query_params": results_query_params,
+            "classification_review_page": classification_review_page,
             "canonical_retailers": CANONICAL_RETAILERS,
         },
         status_code=status_code,

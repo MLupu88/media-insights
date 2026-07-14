@@ -4,6 +4,7 @@
 {% from "components/insight_macros.html" import narrative_generation_row %}
 {% from "components/chat_macros.html" import chat_ask_form, chat_message_bubble, chat_pending_run_notice %}
 {% from "components/review_macros.html" import review_file_group %}
+{% from "components/classification_macros.html" import classification_results_table, classification_review_queue %}
 
 {% block title %}{{ project.name }} — MSL The Practice Media Insights{% endblock %}
 
@@ -43,13 +44,13 @@
     >
       Files
     </button>
-    <button
-      type="button"
-      data-tab-button="classification"
+    <a
+      href="/projects/{{ project.id }}?tab=classification"
+      data-tab-indicator="classification"
       class="border-b-2 pb-3 text-sm font-medium transition {% if active_tab == 'classification' %}border-ink text-ink{% else %}border-transparent text-ink/50 hover:text-ink{% endif %}"
     >
       Classification
-    </button>
+    </a>
     <a
       href="/projects/{{ project.id }}?tab=review"
       data-tab-indicator="review"
@@ -266,6 +267,20 @@
           No classification run has completed yet.
         {% endif %}
       </p>
+
+      {% if classification_summary.classified_rows > 0 %}
+        <div class="mt-12">
+          {{ section_title("Classification results", "Every classified article, filterable and sortable. Rationale is available per row under \"View reasoning\".") }}
+          {% include "components/classification_results_filters.html" %}
+          <div class="mt-4">
+            {% if classification_results and classification_results.rows %}
+              {{ classification_results_table(project, classification_results, results_query_params) }}
+            {% else %}
+              <p class="text-sm text-ink/50">No classification results match the current filters.</p>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
     {% endif %}
   </div>
 
@@ -276,19 +291,33 @@
       </div>
     {% endif %}
 
-    {% if review_groups %}
-      {{ section_title("Rows needing brand review", "Grouped by source file. Assign a canonical brand to resolve a row, individually or in bulk. Rows stay stored and usable while pending.") }}
-      <div class="space-y-6">
-        {% for group in review_groups %}
-          {{ review_file_group(group, canonical_retailers) }}
-        {% endfor %}
-      </div>
-    {% else %}
-      {{ empty_state(
-        "No rows need review",
-        "Every imported row currently has a confidently assigned brand."
-      ) }}
-    {% endif %}
+    <div>
+      {{ section_title("Classification review", "AI classifications awaiting human approval, lowest confidence first. Approve to confirm the AI's labels, or edit and save a correction.") }}
+      {% if classification_review_page and classification_review_page.rows %}
+        {{ classification_review_queue(project, classification_review_page) }}
+      {% else %}
+        {{ empty_state(
+          "No classification results need review.",
+          "Every classification has been approved or corrected."
+        ) }}
+      {% endif %}
+    </div>
+
+    <div class="mt-12">
+      {{ section_title("Brand assignment review", "Grouped by source file. Assign a canonical brand to resolve a row, individually or in bulk. Rows stay stored and usable while pending.") }}
+      {% if review_groups %}
+        <div class="space-y-6">
+          {% for group in review_groups %}
+            {{ review_file_group(group, canonical_retailers) }}
+          {% endfor %}
+        </div>
+      {% else %}
+        {{ empty_state(
+          "No brand assignments need review.",
+          "Every imported row currently has a confidently assigned brand."
+        ) }}
+      {% endif %}
+    </div>
   </div>
 
   <div data-tab-panel="analytics" class="{% if active_tab != 'analytics' %}hidden{% endif %} mt-10">

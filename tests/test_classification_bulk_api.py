@@ -91,6 +91,53 @@ def test_bulk_classification_insert(
     assert classification.confidence == 0.95
 
 
+def test_bulk_classification_high_confidence_starts_approved(
+    client, internal_headers, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    articles = article_factory(project, count=1)
+    batch = _make_batch(db_session, project, articles)
+
+    client.post(
+        BULK_URL,
+        headers=internal_headers,
+        json={
+            "project_id": str(project.id),
+            "batch_id": str(batch.id),
+            "model": "deepseek-chat",
+            "prompt_version": "retail-deepseek-v2",
+            "results": [_valid_result(articles[0].id, confidence=0.95)],
+        },
+    )
+
+    classification = db_session.query(Classification).filter_by(article_id=articles[0].id).one()
+    assert classification.review_status == "approved"
+    assert classification.reviewed_at is None
+
+
+def test_bulk_classification_low_confidence_starts_pending(
+    client, internal_headers, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    articles = article_factory(project, count=1)
+    batch = _make_batch(db_session, project, articles)
+
+    client.post(
+        BULK_URL,
+        headers=internal_headers,
+        json={
+            "project_id": str(project.id),
+            "batch_id": str(batch.id),
+            "model": "deepseek-chat",
+            "prompt_version": "retail-deepseek-v2",
+            "results": [_valid_result(articles[0].id, confidence=0.3)],
+        },
+    )
+
+    classification = db_session.query(Classification).filter_by(article_id=articles[0].id).one()
+    assert classification.review_status == "pending"
+
+
 def test_bulk_classification_upsert_updates_existing(
     client, internal_headers, db_session, project_factory, article_factory
 ):

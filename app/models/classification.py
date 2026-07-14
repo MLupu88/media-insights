@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -56,6 +56,34 @@ class ClassificationTaxonomy:
     )
 
 
+class ClassificationReviewStatus:
+    """Human review state for one Classification row -- independent of
+    RetailerReviewStatus (Article-level brand-assignment review), which
+    this deliberately does not touch or replace.
+
+    A freshly-produced classification starts PENDING only if its
+    confidence is below LOW_CONFIDENCE_THRESHOLD; confident output starts
+    APPROVED (see app.services.classification.initial_review_status,
+    applied at save time -- this default is a defensive fallback only,
+    never the actual decision path). This keeps the Classification Review
+    queue (review_status == PENDING) scoped to what genuinely needs a
+    human look, never all 30,000+ classifications in a large project.
+    APPROVED rows can still be edited (-> CORRECTED); moving a row back to
+    PENDING is reserved for a dedicated "flag for review" action, not an
+    automatic side effect. Existing rows created before this review
+    workflow existed are backfilled to APPROVED by the migration
+    (mirroring RetailerReviewStatus's precedent: historical data is
+    treated as already-resolved, never dumped into a new review queue
+    retroactively).
+    """
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    CORRECTED = "corrected"
+
+    ALL = (PENDING, APPROVED, CORRECTED)
+
+
 class ClassificationBatchStatus:
     PENDING = "pending"
     RUNNING = "running"
@@ -68,7 +96,10 @@ class ClassificationBatchStatus:
 
 class Classification(Base):
     __tablename__ = "classifications"
-    __table_args__ = (Index("ix_classifications_project_id", "project_id"),)
+    __table_args__ = (
+        Index("ix_classifications_project_id", "project_id"),
+        Index("ix_classifications_project_id_review_status", "project_id", "review_status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -94,6 +125,21 @@ class Classification(Base):
 
     model: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # Human review audit trail. `original_ai_labels` is a snapshot of the
+    # six editable fields (primary_topic/secondary_topic/
+    # communication_category/sentiment/brand_role/story_key) taken the
+    # FIRST time a correction is made, and never overwritten again --
+    # confidence/rationale_ro are never edited, so they always remain the
+    # AI's own original output and need no separate snapshot. The current
+    # row fields are always the "effective" values (AI-original if never
+    # corrected, human-corrected otherwise); see
+    # app.services.classification_results.get_effective_classification_values.
+    review_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=ClassificationReviewStatus.PENDING
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    original_ai_labels: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     classified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

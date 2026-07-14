@@ -226,7 +226,8 @@ def test_start_project_narrative_success(
     assert "Narrative generation started" in response.text
     assert mock_post.called
     _, kwargs = mock_post.call_args
-    assert "secret" in kwargs["json"]
+    assert "secret" not in kwargs["json"]
+    assert kwargs["headers"] == {"x-internal-secret": "test-internal-secret"}
     assert "test-internal-secret" not in response.text
 
 

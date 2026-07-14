@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api import analytics, auth, chat, chat_internal, classification, comparison, files, internal, pages
+from app.api import analytics, auth, chat, chat_internal, classification, classification_review, comparison, files, internal, pages
 from app.api import health as health_router
 from app.api import narrative_generations, narratives, reports, review
 from app.config import get_settings
@@ -51,3 +51,4 @@ app.include_router(chat.router)
 app.include_router(chat_internal.router)
 app.include_router(reports.router)
 app.include_router(review.router)
+app.include_router(classification_review.router)
