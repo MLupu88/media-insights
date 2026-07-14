@@ -214,3 +214,64 @@ def test_no_secret_leakage_in_chat_session_detail(
 
     response = authenticated_client.get(f"/chat-sessions/{session.id}")
     assert "test-internal-secret" not in response.text
+
+
+def test_project_chat_pending_run_enables_auto_refresh(
+    authenticated_client, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    project.valid_rows = 1
+    db_session.commit()
+    session = find_or_create_project_session(db_session, project, AnalyticsFilters())
+    run = create_run(db_session, session, "Cate articole sunt?")
+
+    response = authenticated_client.get(f"/projects/{project.id}?tab=chat")
+
+    assert response.status_code == 200
+    assert 'data-async-status-poll' in response.text
+    assert f'/api/ui/chat-runs/{run.id}/status' in response.text
+    assert f'/projects/{project.id}?tab=chat' in response.text
+
+
+def test_project_chat_completed_run_does_not_poll(
+    authenticated_client, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    project.valid_rows = 1
+    db_session.commit()
+    session = find_or_create_project_session(db_session, project, AnalyticsFilters())
+    _complete_a_question(db_session, session)
+
+    response = authenticated_client.get(f"/projects/{project.id}?tab=chat")
+
+    assert response.status_code == 200
+    assert 'data-async-status-poll' not in response.text
+
+
+def test_chat_run_ui_status_is_minimal_and_no_store(
+    authenticated_client, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    session = find_or_create_project_session(db_session, project, AnalyticsFilters())
+    run = create_run(db_session, session, "Cate articole sunt?")
+
+    response = authenticated_client.get(f"/api/ui/chat-runs/{run.id}/status")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {"id": str(run.id), "status": "pending", "terminal": False}
+
+
+def test_chat_run_ui_status_requires_login(client, db_session, project_factory, article_factory):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    session = find_or_create_project_session(db_session, project, AnalyticsFilters())
+    run = create_run(db_session, session, "Cate articole sunt?")
+
+    response = client.get(f"/api/ui/chat-runs/{run.id}/status", follow_redirects=False)
+
+    assert response.status_code in (302, 307)
+    assert response.headers["location"] == "/login"

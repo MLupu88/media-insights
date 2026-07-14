@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.pages import render, render_project_detail
@@ -47,6 +47,29 @@ def _trigger_or_fail(db: Session, generation: NarrativeGeneration) -> NarrativeG
     return generation
 
 
+@router.get("/api/ui/narrative-generations/{generation_id}/status")
+def get_narrative_generation_ui_status(
+    generation_id: uuid.UUID, db: Session = Depends(get_db)
+):
+    """Browser-facing, session-authenticated status probe for automatic
+    refresh. The detailed narrative payload remains behind the existing
+    internal-secret API; this endpoint exposes status only.
+    """
+    generation = db.get(NarrativeGeneration, generation_id)
+    if generation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Narrative generation not found."
+        )
+    return JSONResponse(
+        content={
+            "id": str(generation.id),
+            "status": generation.status,
+            "terminal": generation.status not in NarrativeGenerationStatus.ACTIVE,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.post("/projects/{project_id}/narratives/start")
 def start_project_narrative_generation(
     project_id: uuid.UUID,
@@ -74,23 +97,16 @@ def start_project_narrative_generation(
     if is_new:
         generation = _trigger_or_fail(db, generation)
         if generation.status == NarrativeGenerationStatus.FAILED:
-            return render_project_detail(
-                request,
-                db,
-                project,
-                active_tab="insights",
-                narrative_message={"type": "error", "text": generation.error_message},
-                status_code=status.HTTP_502_BAD_GATEWAY,
+            return RedirectResponse(
+                url=f"/narrative-generations/{generation.id}",
+                status_code=status.HTTP_303_SEE_OTHER,
             )
-        message = {"type": "success", "text": "Narrative generation started."}
-    else:
-        message = {
-            "type": "info",
-            "text": "Reused an existing narrative generation for the same, unchanged input.",
-        }
 
-    return render_project_detail(
-        request, db, project, active_tab="insights", narrative_message=message, status_code=200
+    # Post/Redirect/Get prevents a browser refresh from re-submitting the
+    # generation form. Successful and reused generations return to Insights.
+    return RedirectResponse(
+        url=f"/projects/{project.id}?tab=insights",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

@@ -135,3 +135,67 @@ document.querySelectorAll("[data-delete-confirm-input]").forEach((input) => {
     submitButton.disabled = input.value !== expected;
   });
 });
+
+
+// Progressive enhancement for asynchronous Chat and Insights jobs. The
+// server-rendered pages remain fully usable without JavaScript: a manual
+// refresh still reveals the final state. With JavaScript enabled, only a
+// minimal authenticated status endpoint is polled; the page reloads once
+// when the job reaches a terminal state.
+document.querySelectorAll("[data-async-status-poll]").forEach((poller) => {
+  const statusUrl = poller.getAttribute("data-status-url");
+  const reloadUrl = poller.getAttribute("data-reload-url") || window.location.href;
+  const intervalMs = Number(poller.getAttribute("data-poll-interval-ms") || 1500);
+  const timeoutMs = Number(poller.getAttribute("data-timeout-ms") || 90000);
+  const timeoutMessage =
+    poller.getAttribute("data-timeout-message") ||
+    "This operation is taking longer than expected. You can safely refresh later.";
+
+  if (!statusUrl) return;
+
+  const deadline = Date.now() + timeoutMs;
+  let stopped = false;
+
+  function stopWithMessage(message) {
+    stopped = true;
+    poller.textContent = message;
+  }
+
+  async function checkStatus() {
+    if (stopped) return;
+    if (Date.now() >= deadline) {
+      stopWithMessage(timeoutMessage);
+      return;
+    }
+
+    try {
+      const response = await fetch(statusUrl, {
+        method: "GET",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+
+      if (response.redirected) {
+        window.location.assign(response.url);
+        return;
+      }
+      if (!response.ok) throw new Error(`Status request failed: ${response.status}`);
+
+      const payload = await response.json();
+      if (payload.terminal === true) {
+        stopped = true;
+        window.location.replace(reloadUrl);
+        return;
+      }
+    } catch (_error) {
+      // A transient network failure should not turn a successfully-running
+      // background job into a visible error. Keep polling until the bounded
+      // timeout; a manual refresh remains available throughout.
+    }
+
+    window.setTimeout(checkStatus, intervalMs);
+  }
+
+  window.setTimeout(checkStatus, intervalMs);
+});

@@ -184,3 +184,56 @@ def test_partially_classified_project_can_still_generate(
     assert is_new
     assert generation.source_snapshot["data"]["kpis"]["unique_classified_articles"] == 1
     assert generation.source_snapshot["data"]["kpis"]["unique_unclassified_articles"] == 2
+
+
+def test_insights_pending_generation_enables_auto_refresh(
+    authenticated_client, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    project.valid_rows = 1
+    db_session.commit()
+    generation, _ = create_project_generation(db_session, project, AnalyticsFilters())
+
+    response = authenticated_client.get(f"/projects/{project.id}?tab=insights")
+
+    assert response.status_code == 200
+    assert 'data-async-status-poll' in response.text
+    assert f'/api/ui/narrative-generations/{generation.id}/status' in response.text
+    assert f'/projects/{project.id}?tab=insights' in response.text
+
+
+def test_narrative_ui_status_is_minimal_and_no_store(
+    authenticated_client, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    generation, _ = create_project_generation(db_session, project, AnalyticsFilters())
+
+    response = authenticated_client.get(
+        f"/api/ui/narrative-generations/{generation.id}/status"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "id": str(generation.id),
+        "status": "pending",
+        "terminal": False,
+    }
+
+
+def test_narrative_ui_status_requires_login(
+    client, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    generation, _ = create_project_generation(db_session, project, AnalyticsFilters())
+
+    response = client.get(
+        f"/api/ui/narrative-generations/{generation.id}/status",
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 307)
+    assert response.headers["location"] == "/login"

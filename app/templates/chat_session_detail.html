@@ -37,9 +37,27 @@
     </div>
   {% endif %}
 
+  {% if latest_run and latest_run.status in ("pending", "running") %}
+    <div
+      class="mt-2 text-xs text-ink/50"
+      data-async-status-poll
+      data-status-url="/api/ui/chat-runs/{{ latest_run.id }}/status"
+      data-reload-url="/chat-sessions/{{ chat_session.id }}"
+      data-timeout-message="The answer is taking longer than expected. You can safely refresh this page later."
+      aria-live="polite"
+    >
+      Checking for the completed answer automatically…
+    </div>
+  {% endif %}
+
   {{ chat_ask_form(
     "/chat-sessions/" ~ chat_session.id ~ "/ask",
     disabled=(latest_run is not none and latest_run.status in ("pending", "running"))
   ) }}
 </div>
+{% endblock %}
+
+
+{% block scripts %}
+<script src="/static/js/app.js"></script>
 {% endblock %}
