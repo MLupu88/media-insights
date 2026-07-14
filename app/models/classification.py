@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -114,6 +114,15 @@ class ClassificationBatch(Base):
     __table_args__ = (
         Index("ix_classification_batches_project_id", "project_id"),
         Index("ix_classification_batches_project_id_status", "project_id", "status"),
+        # One active (pending/running) batch per project at a time -- the
+        # DB-level guard against duplicate batch creation from concurrent
+        # "get next batch" calls, mirroring ux_chat_runs_active_per_session.
+        Index(
+            "ux_classification_batches_active_per_project",
+            "project_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'running')"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

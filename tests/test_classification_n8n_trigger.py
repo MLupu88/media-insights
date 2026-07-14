@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import httpx
 
+from app.models.classification import ClassificationBatch, ClassificationBatchStatus
 from app.models.project import AnalysisStatus
 
 
@@ -114,19 +115,70 @@ def test_start_classification_non_2xx_marks_project_failed(
 
 
 @patch("app.services.n8n.httpx.post")
-def test_start_classification_rejects_when_already_active(
+def test_start_classification_rejects_second_click_during_the_queued_window(
     mock_post, authenticated_client, db_session, project_factory, article_factory
 ):
+    """Covers the brief synchronous window between "queued" and the n8n
+    trigger call resolving, before any ClassificationBatch row exists yet
+    (so the active-batch check alone would not catch a second click here).
+    A real double-click within this narrow window is only observable by
+    setting the status directly, since a single-threaded test client always
+    lets the first request run to completion before the second starts.
+    """
     mock_post.return_value = _mock_response(200)
     project = project_factory()
     article_factory(project, count=1)
+    project.analysis_status = AnalysisStatus.QUEUED
+    db_session.commit()
 
-    first = authenticated_client.post(_start_url(project.id))
-    assert first.status_code == 200
+    response = authenticated_client.post(_start_url(project.id))
 
-    second = authenticated_client.post(_start_url(project.id))
-    assert second.status_code == 409
-    assert "already in progress" in second.text.lower()
+    assert response.status_code == 409
+    assert "already in progress" in response.text.lower()
+    assert mock_post.called is False
 
-    # Only one call to n8n should have happened.
+
+@patch("app.services.n8n.httpx.post")
+def test_start_classification_resumable_when_status_is_stale_running_with_no_active_batch(
+    mock_post, authenticated_client, db_session, project_factory, article_factory
+):
+    """Guards against the exact failure mode the batching hotfix targets:
+    if the async continuation after a completed batch never runs (process
+    restart -- BackgroundTasks is not a durable queue) analysis_status can
+    be left at "running" even though no batch is actually in flight. The
+    button/route must still allow a fresh Start Classification click to
+    resume, driven by real active-batch state, not the possibly-stale
+    status column.
+    """
+    mock_post.return_value = _mock_response(200)
+    project = project_factory()
+    article_factory(project, count=1)
+    project.analysis_status = AnalysisStatus.RUNNING
+    db_session.commit()
+
+    response = authenticated_client.post(_start_url(project.id))
+
+    assert response.status_code == 200
     assert mock_post.call_count == 1
+
+
+@patch("app.services.n8n.httpx.post")
+def test_start_classification_blocked_while_a_batch_is_actually_active(
+    mock_post, authenticated_client, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    articles = article_factory(project, count=1)
+    batch = ClassificationBatch(
+        project_id=project.id,
+        status=ClassificationBatchStatus.RUNNING,
+        article_count=1,
+    )
+    db_session.add(batch)
+    db_session.commit()
+    project.analysis_status = AnalysisStatus.RUNNING
+    db_session.commit()
+
+    response = authenticated_client.post(_start_url(project.id))
+
+    assert response.status_code == 409
+    assert mock_post.called is False

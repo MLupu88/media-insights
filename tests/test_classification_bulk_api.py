@@ -1,6 +1,8 @@
 import uuid
+from unittest.mock import patch
 
 from app.models.classification import Classification, ClassificationBatch, ClassificationBatchArticle
+from app.models.project import AnalysisStatus
 
 BULK_URL = "/api/internal/classifications/bulk"
 
@@ -218,6 +220,10 @@ def test_bulk_classification_rejects_duplicate_article_id_in_request(
     assert response.status_code == 422
     assert "duplicate" in response.json()["detail"].lower()
 
+    db_session.refresh(batch)
+    assert batch.status == "failed"
+    assert batch.error_message
+
 
 def test_bulk_classification_rejects_article_not_in_project(
     client, internal_headers, db_session, project_factory, article_factory
@@ -244,6 +250,9 @@ def test_bulk_classification_rejects_article_not_in_project(
     assert response.status_code == 422
     assert db_session.query(Classification).count() == 0
 
+    db_session.refresh(batch)
+    assert batch.status == "failed"
+
 
 def test_bulk_classification_rejects_article_not_in_batch(
     client, internal_headers, db_session, project_factory, article_factory
@@ -268,6 +277,9 @@ def test_bulk_classification_rejects_article_not_in_batch(
 
     assert response.status_code == 422
     assert db_session.query(Classification).count() == 0
+
+    db_session.refresh(batch)
+    assert batch.status == "failed"
 
 
 def test_bulk_classification_batch_not_found(
@@ -313,6 +325,9 @@ def test_bulk_classification_batch_project_mismatch(
 
     assert response.status_code == 422
 
+    db_session.refresh(batch)
+    assert batch.status == "failed"
+
 
 def test_bulk_classification_result_count_mismatch_rejected_without_partial_save(
     client, internal_headers, db_session, project_factory, article_factory
@@ -335,6 +350,9 @@ def test_bulk_classification_result_count_mismatch_rejected_without_partial_save
 
     assert response.status_code == 422
     assert db_session.query(Classification).count() == 0
+
+    db_session.refresh(batch)
+    assert batch.status == "failed"
 
 
 def test_bulk_classification_partial_save_allows_subset(
@@ -384,3 +402,101 @@ def test_bulk_classification_malformed_result_rejected_with_clear_error(
     detail = response.json()["detail"]
     assert isinstance(detail, list)
     assert len(detail) > 0
+
+
+# --- never left pending/running on error (requirement 6) -------------------
+
+
+@patch("app.api.internal.save_classifications_bulk")
+def test_bulk_classification_unexpected_error_marks_batch_failed_with_safe_message(
+    mock_save, client, internal_headers, db_session, project_factory, article_factory
+):
+    mock_save.side_effect = RuntimeError("connection reset by DeepSeek proxy, payload: <secret>")
+    project = project_factory()
+    articles = article_factory(project, count=1)
+    batch = _make_batch(db_session, project, articles)
+
+    response = client.post(
+        BULK_URL,
+        headers=internal_headers,
+        json={
+            "project_id": str(project.id),
+            "batch_id": str(batch.id),
+            "model": "deepseek-chat",
+            "prompt_version": "retail-deepseek-v2",
+            "results": [_valid_result(articles[0].id)],
+        },
+    )
+
+    assert response.status_code == 500
+    assert "<secret>" not in response.text
+    assert "DeepSeek proxy" not in response.text
+
+    db_session.refresh(batch)
+    assert batch.status == "failed"
+    assert batch.error_message
+    assert "<secret>" not in batch.error_message
+
+
+def test_project_is_resumable_after_a_batch_fails_with_prior_progress(
+    client, internal_headers, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    already_classified = article_factory(project, count=1)
+    to_fail = article_factory(project, count=1)
+    project.valid_rows = 2
+    project.classified_rows = 1
+    db_session.commit()
+
+    db_session.add(
+        Classification(
+            id=uuid.uuid4(),
+            article_id=already_classified[0].id,
+            project_id=project.id,
+            primary_topic="other",
+            communication_category="incidental",
+            sentiment="neutral",
+            brand_role="incidental_mention",
+            confidence=0.9,
+            model="deepseek-chat",
+            prompt_version="retail-deepseek-v2",
+        )
+    )
+    db_session.commit()
+
+    batch = _make_batch(db_session, project, to_fail)
+
+    response = client.post(
+        BULK_URL,
+        headers=internal_headers,
+        json={
+            "project_id": str(project.id),
+            "batch_id": str(batch.id),
+            "model": "deepseek-chat",
+            "prompt_version": "retail-deepseek-v2",
+            "partial_save": True,
+            "results": [_valid_result(to_fail[0].id), _valid_result(to_fail[0].id)],  # duplicate -> error
+        },
+    )
+    assert response.status_code == 422
+
+    db_session.refresh(batch)
+    assert batch.status == "failed"
+
+    db_session.refresh(project)
+    # Some progress was already made (1 of 2 classified), so the project
+    # reads as partially complete rather than failed outright -- either
+    # way, it must not be stuck in queued/running.
+    assert project.analysis_status == AnalysisStatus.PARTIALLY_COMPLETE
+
+    # And the actual resumability guard: no active batch remains, so
+    # Start Classification is not blocked.
+    active_batches = (
+        db_session.query(ClassificationBatch)
+        .filter(
+            ClassificationBatch.project_id == project.id,
+            ClassificationBatch.status.in_(("pending", "running")),
+        )
+        .count()
+    )
+    assert active_batches == 0

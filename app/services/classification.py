@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.article import Article, ImportStatus
@@ -14,6 +15,8 @@ from app.models.classification import (
 )
 from app.models.project import AnalysisStatus, Project
 from app.schemas.classification import BulkClassificationRequest
+
+FAILURE_MESSAGE_MAX_LENGTH = 500
 
 
 class ClassificationServiceError(Exception):
@@ -49,35 +52,142 @@ def _eligible_articles(db: Session, project_id: uuid.UUID, only_unclassified: bo
     return list(db.scalars(stmt).all())
 
 
-def create_classification_batches(
+def has_unclassified_valid_articles(db: Session, project_id: uuid.UUID) -> bool:
+    """Whether any valid article for this project still lacks a
+    classification. Used both to decide whether a completed/failed batch
+    should be treated as "more work remains" (project stays running /
+    resumable) and to decide whether to schedule an async continuation.
+    """
+    return (
+        db.scalar(
+            select(Article.id)
+            .where(
+                Article.project_id == project_id,
+                Article.import_status == ImportStatus.VALID,
+                Article.id.notin_(
+                    select(Classification.article_id).where(
+                        Classification.project_id == project_id
+                    )
+                ),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _articles_for_batch(db: Session, batch_id: uuid.UUID) -> list[Article]:
+    return list(
+        db.scalars(
+            select(Article)
+            .join(ClassificationBatchArticle, ClassificationBatchArticle.article_id == Article.id)
+            .where(ClassificationBatchArticle.batch_id == batch_id)
+            .order_by(Article.created_at.asc(), Article.id.asc())
+        ).all()
+    )
+
+
+def _lock_project_for_classification_claim(db: Session, project_id: uuid.UUID) -> None:
+    """Project-scoped transaction lock, held until this transaction commits
+    or rolls back. Mirrors app.services.dedup.lock_project_for_dedup.
+
+    Without this, two concurrent "get next batch" calls for the same
+    project could both observe "no active batch" and both proceed to
+    create one -- the unique index below would then reject the second
+    INSERT, but only *after* both had already done the (wasted, and
+    user-visibly racy) work of picking articles. The lock serializes the
+    whole check-then-act sequence so the second caller sees the first
+    caller's committed batch instead.
+    """
+    db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
+
+
+def claim_next_classification_batch(
     db: Session, project: Project, batch_size: int, only_unclassified: bool
-) -> list[tuple[ClassificationBatch, list[Article]]]:
-    eligible = _eligible_articles(db, project.id, only_unclassified)
+) -> tuple[ClassificationBatch | None, list[Article], bool]:
+    """Atomically obtains at most one batch to process for this project.
 
-    batches: list[tuple[ClassificationBatch, list[Article]]] = []
-    for start in range(0, len(eligible), batch_size):
-        chunk = eligible[start : start + batch_size]
-        if not chunk:
-            continue
-        batch = ClassificationBatch(
-            id=uuid.uuid4(),
-            project_id=project.id,
-            status=ClassificationBatchStatus.PENDING,
-            article_count=len(chunk),
-        )
-        db.add(batch)
-        db.add_all(
-            ClassificationBatchArticle(batch_id=batch.id, article_id=article.id)
-            for article in chunk
-        )
-        batches.append((batch, chunk))
+    Returns (batch, articles, already_running):
+    - a RUNNING batch already exists -> (None, [], True); nothing is
+      created or re-sent, the caller must not re-dispatch to n8n.
+    - a PENDING batch exists -> it is claimed (set RUNNING) and returned
+      exactly once -> (batch, articles, False).
+    - neither exists -> a new batch of up to batch_size eligible articles
+      is created, set RUNNING immediately, and returned -> (batch,
+      articles, False). If none are eligible -> (None, [], False).
 
-    if batches:
-        if project.analysis_status == AnalysisStatus.QUEUED:
-            project.analysis_status = AnalysisStatus.RUNNING
+    Serialized per-project via _lock_project_for_classification_claim; the
+    partial unique index on classification_batches(project_id) WHERE
+    status IN ('pending','running') is an independent, DB-level backstop
+    against the same race (handled below via IntegrityError).
+    """
+    _lock_project_for_classification_claim(db, project.id)
+
+    running = db.scalar(
+        select(ClassificationBatch).where(
+            ClassificationBatch.project_id == project.id,
+            ClassificationBatch.status == ClassificationBatchStatus.RUNNING,
+        )
+    )
+    if running is not None:
+        return None, [], True
+
+    pending = db.scalar(
+        select(ClassificationBatch).where(
+            ClassificationBatch.project_id == project.id,
+            ClassificationBatch.status == ClassificationBatchStatus.PENDING,
+        )
+    )
+    if pending is not None:
+        pending.status = ClassificationBatchStatus.RUNNING
+        pending.started_at = datetime.now(timezone.utc)
+        project.analysis_status = AnalysisStatus.RUNNING
         db.commit()
+        return pending, _articles_for_batch(db, pending.id), False
 
-    return batches
+    eligible = _eligible_articles(db, project.id, only_unclassified)
+    chunk = eligible[:batch_size]
+    if not chunk:
+        return None, [], False
+
+    batch = ClassificationBatch(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        status=ClassificationBatchStatus.RUNNING,
+        article_count=len(chunk),
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(batch)
+    db.add_all(
+        ClassificationBatchArticle(batch_id=batch.id, article_id=article.id)
+        for article in chunk
+    )
+    project.analysis_status = AnalysisStatus.RUNNING
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # Defense-in-depth: the project-row lock above should make this
+        # unreachable in practice, but if it ever fires, fall back to
+        # whatever the winning concurrent call committed rather than
+        # erroring the request.
+        db.rollback()
+        existing = db.scalar(
+            select(ClassificationBatch).where(
+                ClassificationBatch.project_id == project.id,
+                ClassificationBatch.status.in_(ClassificationBatchStatus.ACTIVE),
+            )
+        )
+        if existing is None:
+            raise
+        if existing.status == ClassificationBatchStatus.RUNNING:
+            return None, [], True
+        existing.status = ClassificationBatchStatus.RUNNING
+        existing.started_at = datetime.now(timezone.utc)
+        db.commit()
+        return existing, _articles_for_batch(db, existing.id), False
+
+    return batch, chunk, False
 
 
 def recompute_project_classified_rows(db: Session, project_id: uuid.UUID) -> None:
@@ -94,7 +204,21 @@ def recompute_project_classified_rows(db: Session, project_id: uuid.UUID) -> Non
     db.commit()
 
 
-def _recompute_project_classification_status(db: Session, project_id: uuid.UUID) -> None:
+def recompute_project_classification_status(
+    db: Session, project_id: uuid.UUID, *, continuation_pending: bool
+) -> None:
+    """Re-derives the project's analysis_status after a batch stops being
+    active (completed or failed).
+
+    `continuation_pending` distinguishes the two callers: True from
+    complete_batch (an async trigger for the next batch has just been
+    scheduled, so "more work remains" should still read as running), False
+    from fail_batch and from the background continuation's own failure
+    handler (nothing further is queued, so the project must land on a
+    status that does not block "Start Classification" -- see
+    app.api.classification.start_classification's active-batch check,
+    which is the actual resumability guard; this status is for display).
+    """
     project = db.get(Project, project_id)
     if project is None:
         return
@@ -111,13 +235,43 @@ def _recompute_project_classification_status(db: Session, project_id: uuid.UUID)
 
     if active_batches > 0:
         project.analysis_status = AnalysisStatus.RUNNING
-    elif project.classified_rows > 0:
-        if project.classified_rows >= project.valid_rows:
-            project.analysis_status = AnalysisStatus.COMPLETE
+    elif has_unclassified_valid_articles(db, project_id):
+        if continuation_pending:
+            project.analysis_status = AnalysisStatus.RUNNING
         else:
-            project.analysis_status = AnalysisStatus.PARTIALLY_COMPLETE
+            project.analysis_status = (
+                AnalysisStatus.PARTIALLY_COMPLETE
+                if project.classified_rows > 0
+                else AnalysisStatus.FAILED
+            )
+    elif project.classified_rows > 0:
+        project.analysis_status = AnalysisStatus.COMPLETE
 
     db.commit()
+
+
+def fail_batch(db: Session, batch_id: uuid.UUID, message: str) -> ClassificationBatch | None:
+    """Marks a batch failed after any error during its processing, so it
+    never stays stuck pending/running (the root cause of the 754-batch
+    production incident this hotfix follows). Rolls back first so a
+    partially-applied failed write (e.g. a bad DeepSeek result mid-loop)
+    never leaves the session in an unusable state before this reload; only
+    a short, safe message is persisted -- never a raw exception message,
+    payload, or article content.
+    """
+    db.rollback()
+    batch = db.get(ClassificationBatch, batch_id)
+    if batch is None:
+        return None
+
+    safe_message = (message or "").strip()[:FAILURE_MESSAGE_MAX_LENGTH] or "Classification batch failed."
+    batch.status = ClassificationBatchStatus.FAILED
+    batch.error_message = safe_message
+    db.commit()
+
+    recompute_project_classification_status(db, batch.project_id, continuation_pending=False)
+
+    return batch
 
 
 def save_classifications_bulk(
@@ -214,10 +368,6 @@ def save_classifications_bulk(
             )
             saved_count += 1
 
-    if batch.status == ClassificationBatchStatus.PENDING:
-        batch.status = ClassificationBatchStatus.RUNNING
-        batch.started_at = datetime.now(timezone.utc)
-
     db.commit()
 
     recompute_project_classified_rows(db, request.project_id)
@@ -225,10 +375,34 @@ def save_classifications_bulk(
     return saved_count, updated_count
 
 
-def complete_batch(db: Session, batch_id: uuid.UUID) -> ClassificationBatch:
-    batch = db.get(ClassificationBatch, batch_id)
+def complete_batch(db: Session, batch_id: uuid.UUID) -> tuple[ClassificationBatch, bool]:
+    """Marks a batch complete. Idempotent and safe under concurrent replay:
+    replaying the same completion request for a batch that is already
+    COMPLETE returns it unchanged (newly_completed=False) instead of
+    re-running the missing-classification check or re-triggering a second
+    continuation -- the caller uses newly_completed to decide whether to
+    schedule the async "start next batch" continuation.
+
+    SELECT ... FOR UPDATE on the batch row is what actually makes this safe
+    against two concurrent completion requests for the same batch (e.g. a
+    retried "Complete Batch" call from n8n): the second call blocks here
+    until the first's transaction commits, then re-reads the row and finds
+    it already COMPLETE, landing on the idempotent early return above
+    instead of racing to also flip it and also report newly_completed=True.
+    """
+    batch = db.scalar(
+        select(ClassificationBatch).where(ClassificationBatch.id == batch_id).with_for_update()
+    )
     if batch is None:
         raise ClassificationServiceError("Batch not found.", 404)
+
+    if batch.status == ClassificationBatchStatus.COMPLETE:
+        return batch, False
+
+    if batch.status == ClassificationBatchStatus.FAILED:
+        raise ClassificationServiceError(
+            "Batch has already failed and cannot be completed.", 409
+        )
 
     batch_article_ids = set(
         db.scalars(
@@ -256,9 +430,12 @@ def complete_batch(db: Session, batch_id: uuid.UUID) -> ClassificationBatch:
     batch.completed_at = datetime.now(timezone.utc)
     db.commit()
 
-    _recompute_project_classification_status(db, batch.project_id)
+    has_remaining = has_unclassified_valid_articles(db, batch.project_id)
+    recompute_project_classification_status(
+        db, batch.project_id, continuation_pending=has_remaining
+    )
 
-    return batch
+    return batch, True
 
 
 def get_project_summary(db: Session, project: Project) -> dict:

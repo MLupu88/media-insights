@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.pages import render_project_detail
 from app.database import get_db
 from app.models.article import Article, ImportStatus
+from app.models.classification import ClassificationBatch, ClassificationBatchStatus
 from app.models.project import AnalysisStatus, Project
 from app.security.auth import require_web_session
 from app.services.n8n import N8nTriggerError, trigger_classification
@@ -27,7 +28,26 @@ def start_classification(
 ):
     project = _get_project_or_404(db, project_id)
 
-    if project.analysis_status in (AnalysisStatus.QUEUED, AnalysisStatus.RUNNING):
+    has_active_batch = (
+        db.scalar(
+            select(ClassificationBatch.id)
+            .where(
+                ClassificationBatch.project_id == project_id,
+                ClassificationBatch.status.in_(ClassificationBatchStatus.ACTIVE),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+    # analysis_status == QUEUED is checked in addition to an actual active
+    # batch: a batch only exists once n8n calls back into
+    # classification-batches, so a second click during that brief window
+    # (before any batch row exists) would otherwise slip through. Beyond
+    # that window, actual batch existence -- not analysis_status, which can
+    # go stale if the async continuation never runs (BackgroundTasks is not
+    # a durable queue) -- is what determines whether classification can be
+    # (re)started.
+    if project.analysis_status == AnalysisStatus.QUEUED or has_active_batch:
         return render_project_detail(
             request,
             db,

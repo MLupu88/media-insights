@@ -29,6 +29,7 @@ class ClassificationBatchOut(BaseModel):
 class ClassificationBatchesResponse(BaseModel):
     project_id: uuid.UUID
     batches: list[ClassificationBatchOut]
+    already_running: bool = False
 
 
 class ClassificationResultIn(BaseModel):

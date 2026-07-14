@@ -1,3 +1,4 @@
+import threading
 import uuid
 
 from app.models.article import ImportStatus
@@ -7,6 +8,7 @@ from app.models.classification import (
     ClassificationBatchArticle,
     ClassificationBatchStatus,
 )
+from app.database import SessionLocal
 
 
 def _batches_url(project_id, **params) -> str:
@@ -15,7 +17,7 @@ def _batches_url(project_id, **params) -> str:
     return f"{url}?{query}" if query else url
 
 
-def test_batch_generation_creates_batches_for_valid_articles(
+def test_batch_generation_creates_exactly_one_batch_per_request(
     client, internal_headers, project_factory, article_factory
 ):
     project = project_factory()
@@ -28,9 +30,14 @@ def test_batch_generation_creates_batches_for_valid_articles(
     assert response.status_code == 200
     body = response.json()
     assert body["project_id"] == str(project.id)
-    assert len(body["batches"]) == 3  # 2 + 2 + 1
-    total_articles = sum(len(b["articles"]) for b in body["batches"])
-    assert total_articles == 5
+    assert body["already_running"] is False
+    assert len(body["batches"]) == 1
+    assert len(body["batches"][0]["articles"]) == 2
+
+    batch_id = uuid.UUID(body["batches"][0]["batch_id"])
+    with SessionLocal() as session:
+        batch = session.get(ClassificationBatch, batch_id)
+        assert batch.status == ClassificationBatchStatus.RUNNING
 
 
 def test_batch_generation_does_not_create_empty_batches(
@@ -41,7 +48,9 @@ def test_batch_generation_does_not_create_empty_batches(
     response = client.get(_batches_url(project.id), headers=internal_headers)
 
     assert response.status_code == 200
-    assert response.json()["batches"] == []
+    body = response.json()
+    assert body["batches"] == []
+    assert body["already_running"] is False
 
 
 def test_batch_generation_ordering_is_deterministic(db_session, project_factory, article_factory):
@@ -64,7 +73,9 @@ def test_batch_size_minimum_boundary(client, internal_headers, project_factory, 
     response = client.get(_batches_url(project.id, batch_size=1), headers=internal_headers)
 
     assert response.status_code == 200
-    assert len(response.json()["batches"]) == 3
+    body = response.json()
+    assert len(body["batches"]) == 1
+    assert len(body["batches"][0]["articles"]) == 1
 
 
 def test_batch_size_maximum_boundary(client, internal_headers, project_factory, article_factory):
@@ -201,30 +212,104 @@ def test_duplicate_rows_are_preserved_and_flagged_in_payload(
     assert duplicate_flags == {True, False}
 
 
-def test_article_not_assigned_to_multiple_active_batches(
+def test_batch_payload_uses_source_as_publication_and_audience_as_reach(
+    client, internal_headers, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, source="Ziarul Financiar", audience=250000.0)
+
+    response = client.get(_batches_url(project.id, batch_size=10), headers=internal_headers)
+
+    article = response.json()["batches"][0]["articles"][0]
+    assert article["publication"] == "Ziarul Financiar"
+    assert article["reach"] == 250000.0
+
+
+# --- one batch per request / active-batch reuse (requirements 1-2, 7) ------
+
+
+def test_second_call_while_batch_running_returns_no_new_batch(
     client, internal_headers, db_session, project_factory, article_factory
 ):
     project = project_factory()
     article_factory(project, count=5)
 
-    first_response = client.get(
-        _batches_url(project.id, batch_size=2), headers=internal_headers
-    )
-    first_batches = first_response.json()["batches"]
-    assigned_ids = {a["article_id"] for b in first_batches for a in b["articles"]}
-    assert len(assigned_ids) == 5
+    first = client.get(_batches_url(project.id, batch_size=2), headers=internal_headers).json()
+    assert len(first["batches"]) == 1
+    assert first["already_running"] is False
 
-    # All 5 articles are now claimed by active (pending) batches; a second
-    # generation call must find nothing left to assign.
-    second_response = client.get(
-        _batches_url(project.id, batch_size=2), headers=internal_headers
-    )
-    assert second_response.json()["batches"] == []
+    second = client.get(_batches_url(project.id, batch_size=2), headers=internal_headers).json()
+    assert second["batches"] == []
+    assert second["already_running"] is True
 
-    # Sanity: the batch/article link rows exist and are unique per article.
-    links = db_session.query(ClassificationBatchArticle).all()
-    article_ids = [link.article_id for link in links]
-    assert len(article_ids) == len(set(article_ids)) == 5
+    # Only one batch, and only the first call's 2 articles, were ever claimed.
+    assert db_session.query(ClassificationBatch).filter_by(project_id=project.id).count() == 1
+    links = (
+        db_session.query(ClassificationBatchArticle)
+        .join(ClassificationBatch)
+        .filter(ClassificationBatch.project_id == project.id)
+        .all()
+    )
+    assert len(links) == 2
+
+
+def test_pending_batch_is_claimed_and_returned_once(
+    client, internal_headers, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    articles = article_factory(project, count=2)
+    batch = ClassificationBatch(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        status=ClassificationBatchStatus.PENDING,
+        article_count=2,
+    )
+    db_session.add(batch)
+    db_session.add_all(
+        ClassificationBatchArticle(batch_id=batch.id, article_id=a.id) for a in articles
+    )
+    db_session.commit()
+
+    response = client.get(_batches_url(project.id, batch_size=40), headers=internal_headers)
+    body = response.json()
+
+    assert body["already_running"] is False
+    assert len(body["batches"]) == 1
+    assert body["batches"][0]["batch_id"] == str(batch.id)
+
+    db_session.rollback()
+    db_session.refresh(batch)
+    assert batch.status == ClassificationBatchStatus.RUNNING
+
+    # A second call now sees it as running, not pending -- no duplicate.
+    second = client.get(_batches_url(project.id, batch_size=40), headers=internal_headers).json()
+    assert second["batches"] == []
+    assert second["already_running"] is True
+
+
+def test_running_batch_is_never_returned_again(
+    client, internal_headers, db_session, project_factory, article_factory
+):
+    project = project_factory()
+    articles = article_factory(project, count=2)
+    batch = ClassificationBatch(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        status=ClassificationBatchStatus.RUNNING,
+        article_count=2,
+    )
+    db_session.add(batch)
+    db_session.add_all(
+        ClassificationBatchArticle(batch_id=batch.id, article_id=a.id) for a in articles
+    )
+    db_session.commit()
+
+    response = client.get(_batches_url(project.id, batch_size=40), headers=internal_headers)
+    body = response.json()
+
+    assert body["batches"] == []
+    assert body["already_running"] is True
+    assert db_session.query(ClassificationBatch).filter_by(project_id=project.id).count() == 1
 
 
 def test_completed_batch_frees_its_articles_from_active_exclusion(
@@ -249,14 +334,57 @@ def test_completed_batch_frees_its_articles_from_active_exclusion(
     assert len(second["batches"][0]["articles"]) == 2
 
 
-def test_batch_payload_uses_source_as_publication_and_audience_as_reach(
-    client, internal_headers, project_factory, article_factory
+def test_concurrent_batch_requests_do_not_create_duplicate_batches(
+    client, internal_headers, db_session, project_factory, article_factory
 ):
+    """Two near-simultaneous 'get next batch' calls for a project with no
+    active batch yet must not both create one -- the project-row lock
+    inside claim_next_classification_batch (and the partial unique index
+    as a backstop) must serialize them.
+    """
     project = project_factory()
-    article_factory(project, count=1, source="Ziarul Financiar", audience=250000.0)
+    article_factory(project, count=40)
+    # Captured before spawning threads: the shared db_session fixture (and
+    # any ORM object bound to it, like `project`) is not thread-safe.
+    project_id = project.id
+    batches_url = _batches_url(project_id, batch_size=40)
 
-    response = client.get(_batches_url(project.id, batch_size=10), headers=internal_headers)
+    results: list[dict] = [None, None]  # type: ignore[list-item]
 
-    article = response.json()["batches"][0]["articles"][0]
-    assert article["publication"] == "Ziarul Financiar"
-    assert article["reach"] == 250000.0
+    def _call(index: int) -> None:
+        response = client.get(batches_url, headers=internal_headers)
+        results[index] = response.json()
+
+    barrier = threading.Barrier(2)
+
+    def _synchronized_call(index: int) -> None:
+        barrier.wait()
+        _call(index)
+
+    threads = [threading.Thread(target=_synchronized_call, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    with SessionLocal() as session:
+        batches = (
+            session.query(ClassificationBatch).filter_by(project_id=project_id).all()
+        )
+        assert len(batches) == 1
+
+        links = (
+            session.query(ClassificationBatchArticle)
+            .join(ClassificationBatch)
+            .filter(ClassificationBatch.project_id == project_id)
+            .all()
+        )
+        article_ids = [link.article_id for link in links]
+        assert len(article_ids) == len(set(article_ids)) == 40
+
+    # Exactly one of the two responses got the real batch; the other saw it
+    # already running.
+    already_running_flags = [r["already_running"] for r in results]
+    non_empty_batches = [r for r in results if r["batches"]]
+    assert already_running_flags.count(True) == 1
+    assert len(non_empty_batches) == 1

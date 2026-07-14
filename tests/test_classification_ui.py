@@ -1,3 +1,6 @@
+import re
+
+
 def test_classification_tab_empty_state_before_import(authenticated_client, project_factory):
     project = project_factory()
 
@@ -46,3 +49,29 @@ def test_classification_workspace_requires_authentication(client, project_factor
 
     assert response.status_code == 307
     assert response.headers["location"] == "/login"
+
+
+def test_start_classification_button_reenables_when_status_is_stale_running_with_no_active_batch(
+    authenticated_client, db_session, project_factory, article_factory
+):
+    """analysis_status can be left at "running" if the async batch
+    continuation never runs (see test_classification_n8n_trigger.py) -- the
+    button must be driven by live active-batch data, not that stale flag.
+    """
+    project = project_factory()
+    article_factory(project, count=4)
+    project.valid_rows = 4
+    project.classified_rows = 0
+    project.analysis_status = "running"
+    db_session.commit()
+
+    response = authenticated_client.get(f"/projects/{project.id}?tab=classification")
+
+    assert response.status_code == 200
+    button_start = response.text.index("Start classification")
+    button_markup_start = response.text.rindex("<button", 0, button_start)
+    button_markup = response.text[button_markup_start:button_start]
+    # The button's class list legitimately contains Tailwind
+    # "disabled:..." variant selectors -- only a bare `disabled` HTML
+    # attribute (not followed by ":") means the button is actually disabled.
+    assert re.search(r"\bdisabled\b(?!:)", button_markup) is None

@@ -220,7 +220,7 @@
             <button
               type="submit"
               class="bg-ink px-5 py-2.5 text-sm font-medium text-paper transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
-              {% if project.analysis_status in ("queued", "running") %}disabled{% endif %}
+              {% if project.analysis_status == "queued" or classification_summary.active_batch_count > 0 %}disabled{% endif %}
             >
               Start classification
             </button>
