@@ -5,10 +5,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
+from app.models.classification import ClassificationBatch, ClassificationBatchStatus
 from app.models.project import Project
 from app.models.uploaded_file import UploadedFile, UploadedFileStatus
 from app.schemas.classification import (
     BatchCompleteResponse,
+    BatchFailRequest,
+    BatchFailResponse,
     BulkClassificationRequest,
     BulkClassificationResponse,
     ClassificationBatchArticleOut,
@@ -224,6 +227,39 @@ def complete_classification_batch(
         background_tasks.add_task(_continue_classification_in_background, batch.project_id)
 
     return BatchCompleteResponse(status="complete", batch_id=batch.id)
+
+
+@router.post(
+    "/classification-batches/{batch_id}/fail",
+    response_model=BatchFailResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def fail_classification_batch(
+    batch_id: uuid.UUID,
+    payload: BatchFailRequest,
+    db: Session = Depends(get_db),
+):
+    """Explicit failure callback for asynchronous n8n processing.
+
+    Validation/parsing failures happen before the bulk-save endpoint, so
+    without this callback a claimed batch can remain RUNNING indefinitely.
+    The route is idempotent for an already-failed batch and refuses to
+    rewrite a completed batch as failed.
+    """
+    batch = db.get(ClassificationBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+    if batch.status == ClassificationBatchStatus.COMPLETE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Completed classification batch cannot be marked failed.",
+        )
+    if batch.status != ClassificationBatchStatus.FAILED:
+        batch = fail_batch(db, batch_id, payload.error_message)
+        if batch is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found.")
+
+    return BatchFailResponse(status="failed", batch_id=batch.id)
 
 
 @router.get("/projects/{project_id}/summary", response_model=ProjectSummaryResponse)

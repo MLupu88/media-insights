@@ -286,6 +286,7 @@ def fail_batch(db: Session, batch_id: uuid.UUID, message: str) -> Classification
 
     safe_message = (message or "").strip()[:FAILURE_MESSAGE_MAX_LENGTH] or "Classification batch failed."
     batch.status = ClassificationBatchStatus.FAILED
+    batch.completed_at = datetime.now(timezone.utc)
     batch.error_message = safe_message
     db.commit()
 
