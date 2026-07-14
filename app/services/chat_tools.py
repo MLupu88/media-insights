@@ -38,6 +38,7 @@ from app.schemas.chat import (
     GetTopicDistributionParams,
     GetValidNarrativeInsightsParams,
 )
+from app.services.entity_resolution import resolve_unique_entity_alias
 from app.services.analytics import (
     DEFAULT_TOP_N,
     MAX_TOP_N,
@@ -409,7 +410,7 @@ COMPARISON_SCOPE_TOOLS: tuple[str, ...] = (
 
 def _validate_entity_scope(
     db: Session, scope: ChatScopeContext, tool_name: str, params: BaseModel
-) -> None:
+) -> BaseModel:
     """String tool parameters must resolve against real scope data, not
     just pass Pydantic type validation — an unknown brand/topic/
     publication/sentiment/story_key is a hard rejection, never a silently
@@ -417,15 +418,20 @@ def _validate_entity_scope(
     """
     if tool_name == ToolName.GET_BRAND_PERFORMANCE and params.brand:
         options = _available_options_for_projects(db, [scope.project], scope.filters)
-        if params.brand not in options["brands"]:
+        canonical_brand = resolve_unique_entity_alias(params.brand, options["brands"])
+        if canonical_brand is None:
             raise ToolValidationError(f"Unknown brand: {params.brand!r}.")
+        params = params.model_copy(update={"brand": canonical_brand})
 
     if tool_name == ToolName.GET_PROJECT_ARTICLES:
         projects = _resolve_period_projects(scope, params.period)
         if params.brand or params.publication:
             options = _available_options_for_projects(db, projects, scope.filters)
-            if params.brand and params.brand not in options["brands"]:
-                raise ToolValidationError(f"Unknown brand: {params.brand!r}.")
+            if params.brand:
+                canonical_brand = resolve_unique_entity_alias(params.brand, options["brands"])
+                if canonical_brand is None:
+                    raise ToolValidationError(f"Unknown brand: {params.brand!r}.")
+                params = params.model_copy(update={"brand": canonical_brand})
             if params.publication and params.publication not in options["publications"]:
                 raise ToolValidationError(f"Unknown publication: {params.publication!r}.")
         if params.topic and params.topic not in ClassificationTaxonomy.PRIMARY_TOPICS:
@@ -436,6 +442,8 @@ def _validate_entity_scope(
             known = _known_story_keys(db, [p.id for p in projects])
             if params.story_key not in known:
                 raise ToolValidationError(f"Unknown story_key: {params.story_key!r}.")
+
+    return params
 
 
 def validate_and_parse_tool_call(
@@ -464,8 +472,7 @@ def validate_and_parse_tool_call(
             f"Malformed parameters for {tool_name!r}: {message}"
         ) from exc
 
-    _validate_entity_scope(db, scope, tool_name, params)
-    return params
+    return _validate_entity_scope(db, scope, tool_name, params)
 
 
 def execute_tool_call(db: Session, scope: ChatScopeContext, tool_name: str, params: BaseModel) -> dict:

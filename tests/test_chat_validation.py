@@ -131,6 +131,32 @@ def test_known_narrative_insight_id_accepted():
     assert result.valid, result.reason
 
 
+def test_unique_related_brand_alias_is_accepted_and_canonicalized():
+    snapshot = {
+        "tool_results": [
+            {
+                "requested_brand": {"brand": "Penny / Rewe", "sov_pct": 24.6},
+                "available_filter_options": {
+                    "brands": ["Penny / Rewe"],
+                    "publications": [],
+                    "primary_topics": [],
+                    "communication_categories": [],
+                    "sentiments": [],
+                },
+            }
+        ]
+    }
+    submission = _submission(
+        answer_text="Penny a avut un SOV de 24,6%.",
+        related_brand="Penny",
+    )
+
+    result = validate_answer(submission, snapshot)
+
+    assert result.valid, result.reason
+    assert result.canonical_related_brand == "Penny / Rewe"
+
+
 def test_unknown_related_brand_rejected():
     submission = _submission(related_brand="Lidl")
     result = validate_answer(submission, SNAPSHOT)

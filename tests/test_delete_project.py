@@ -6,6 +6,8 @@ name-confirmation gate.
 import uuid
 from pathlib import Path
 
+from sqlalchemy import event
+
 from app.models.article import Article
 from app.models.chat import ChatSession
 from app.models.classification import Classification
@@ -138,6 +140,52 @@ def test_delete_never_touches_another_projects_directory(
     articles_a = db_session.query(Article).filter_by(project_id=project_a.id).all()
     assert len(articles_a) > 0  # project A's data is fully intact
 
+
+def test_large_project_delete_uses_one_database_cascade_without_loading_children(
+    authenticated_client, db_session, project_factory, article_factory, classification_factory
+):
+    """Regression for the production 504: deleting a large project must not
+    SELECT or DELETE every child table through the ORM. PostgreSQL handles all
+    child rows through ON DELETE CASCADE after one projects DELETE.
+    """
+    project = project_factory(name="Large Cascade Project")
+    articles = article_factory(project, count=250, retailer="Penny / Rewe")
+    for article in articles[:10]:
+        classification_factory(article)
+
+    statements: list[str] = []
+
+    def capture_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(" ".join(statement.split()).upper())
+
+    event.listen(db_session.bind, "before_cursor_execute", capture_statement)
+    try:
+        response = authenticated_client.post(
+            f"/projects/{project.id}/delete",
+            data={"confirm_name": project.name},
+            follow_redirects=False,
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", capture_statement)
+
+    assert response.status_code == 303
+    assert any(statement.startswith("DELETE FROM PROJECTS") for statement in statements)
+
+    child_tables = (
+        "ARTICLES",
+        "CLASSIFICATIONS",
+        "CLASSIFICATION_BATCHES",
+        "UPLOADED_FILES",
+        "IMPORT_BATCHES",
+        "NARRATIVE_GENERATIONS",
+        "CHAT_SESSIONS",
+    )
+    assert not [
+        statement
+        for statement in statements
+        if statement.startswith(("SELECT", "DELETE"))
+        and any(f" {table} " in f" {statement} " for table in child_tables)
+    ]
 
 # --- authentication / authorization ------------------------------------------
 

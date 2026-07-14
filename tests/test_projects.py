@@ -126,3 +126,54 @@ def test_project_detail_page_404_for_unknown_project(authenticated_client):
     )
 
     assert response.status_code == 404
+
+
+def test_overview_invites_empty_project_to_import(authenticated_client, project_factory):
+    project = project_factory(name="Empty Overview")
+
+    response = authenticated_client.get(f"/projects/{project.id}")
+
+    assert response.status_code == 200
+    assert "Import data to begin" in response.text
+    assert f"/projects/{project.id}?tab=files" in response.text
+    assert "coming soon" not in response.text.lower()
+
+
+def test_overview_directs_imported_project_to_classification(
+    authenticated_client, db_session, project_factory
+):
+    project = project_factory(name="Needs Classification")
+    project.total_files = 1
+    project.total_rows = 3
+    project.valid_rows = 3
+    project.classified_rows = 0
+    db_session.commit()
+
+    response = authenticated_client.get(f"/projects/{project.id}")
+
+    assert response.status_code == 200
+    assert "Classification is the next step" in response.text
+    assert "0 of 3 valid articles are classified" in response.text
+    assert f"/projects/{project.id}?tab=classification" in response.text
+
+
+def test_overview_shows_ready_actions_after_classification(
+    authenticated_client, db_session, project_factory
+):
+    project = project_factory(name="Ready Overview")
+    project.total_files = 1
+    project.total_rows = 3
+    project.valid_rows = 3
+    project.classified_rows = 3
+    db_session.commit()
+
+    response = authenticated_client.get(f"/projects/{project.id}")
+
+    assert response.status_code == 200
+    assert "Project ready for analysis" in response.text
+    assert "All 3 valid articles are classified" in response.text
+    assert "View classifications" in response.text
+    assert "Open analytics" in response.text
+    assert "Generate insights" in response.text
+    assert "Open chat" in response.text
+    assert "coming soon" not in response.text.lower()

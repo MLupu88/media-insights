@@ -73,6 +73,51 @@ def test_malformed_parameters_rejected(db_session, project_factory):
         )
 
 
+def test_unique_brand_segment_alias_is_canonicalized(
+    db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Penny / Rewe")
+    scope = _project_scope(project)
+
+    params = validate_and_parse_tool_call(
+        db_session, scope, ToolName.GET_BRAND_PERFORMANCE, {"brand": "Penny"}
+    )
+
+    assert params.brand == "Penny / Rewe"
+    result = execute_tool_call(
+        db_session, scope, ToolName.GET_BRAND_PERFORMANCE, params
+    )
+    assert result["requested_brand"]["brand"] == "Penny / Rewe"
+
+
+def test_brand_alias_resolution_is_case_insensitive(
+    db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Penny / Rewe")
+    scope = _project_scope(project)
+
+    params = validate_and_parse_tool_call(
+        db_session, scope, ToolName.GET_PROJECT_ARTICLES, {"brand": "pEnNy"}
+    )
+
+    assert params.brand == "Penny / Rewe"
+
+
+def test_ambiguous_brand_segment_alias_is_rejected(
+    db_session, project_factory, article_factory
+):
+    project = project_factory()
+    article_factory(project, count=1, retailer="Penny / Rewe")
+    article_factory(project, count=1, retailer="Penny / Other")
+    scope = _project_scope(project)
+
+    with pytest.raises(ToolValidationError, match="Unknown brand"):
+        validate_and_parse_tool_call(
+            db_session, scope, ToolName.GET_BRAND_PERFORMANCE, {"brand": "Penny"}
+        )
+
 def test_unknown_brand_rejected(db_session, project_factory, article_factory):
     project = project_factory()
     article_factory(project, count=1, retailer="Auchan")
