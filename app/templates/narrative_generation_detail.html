@@ -35,6 +35,19 @@
     </div>
   {% endif %}
 
+  {% if generation.status in ("pending", "running") %}
+    <div
+      class="mt-6 text-xs text-ink/50"
+      data-async-status-poll
+      data-status-url="/api/ui/narrative-generations/{{ generation.id }}/status"
+      data-reload-url="/narrative-generations/{{ generation.id }}"
+      data-timeout-message="Insight generation is taking longer than expected. You can safely refresh this page later."
+      aria-live="polite"
+    >
+      Generating insights… This page will update automatically.
+    </div>
+  {% endif %}
+
   <div class="mt-8">
     {{ section_title("Insights", "Grounded strictly in the analytics snapshot captured when this generation was created.") }}
 
@@ -56,4 +69,9 @@
     Contract: {{ generation.prompt_contract_version }} / {{ generation.payload_schema_version }} / {{ generation.validator_version }}
   </p>
 </div>
+{% endblock %}
+
+
+{% block scripts %}
+<script src="/static/js/app.js"></script>
 {% endblock %}

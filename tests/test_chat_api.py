@@ -217,13 +217,47 @@ def test_ask_project_chat_success(mock_post, authenticated_client, db_session, p
     project.valid_rows = 1
     db_session.commit()
 
-    response = authenticated_client.post(f"/projects/{project.id}/chat/ask", data={"question": "Care este SOV?"})
-    assert response.status_code == 200
-    assert "test-internal-secret" not in response.text
+    response = authenticated_client.post(
+        f"/projects/{project.id}/chat/ask",
+        data={"question": "Care este SOV?"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/projects/{project.id}?tab=chat"
     assert mock_post.called
     _, kwargs = mock_post.call_args
     assert "secret" not in kwargs["json"]
     assert kwargs["headers"] == {"x-internal-secret": "test-internal-secret"}
+
+
+@patch("app.services.n8n.httpx.post")
+def test_project_chat_uses_post_redirect_get_and_refresh_does_not_duplicate(
+    mock_post, authenticated_client, db_session, project_factory, article_factory
+):
+    mock_post.return_value = _mock_response(202)
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+    project.valid_rows = 1
+    db_session.commit()
+
+    post_response = authenticated_client.post(
+        f"/projects/{project.id}/chat/ask",
+        data={"question": "Cate articole valide sunt?"},
+        follow_redirects=False,
+    )
+    assert post_response.status_code == 303
+
+    # Refreshes are GET requests to the redirect target and therefore cannot
+    # replay the form submission.
+    authenticated_client.get(post_response.headers["location"])
+    authenticated_client.get(post_response.headers["location"])
+
+    from app.models.chat import ChatMessage, ChatSession
+
+    session = db_session.query(ChatSession).filter_by(project_id=project.id).one()
+    messages = db_session.query(ChatMessage).filter_by(session_id=session.id).all()
+    assert [message.content for message in messages] == ["Cate articole valide sunt?"]
+    assert mock_post.call_count == 1
 
 
 @patch("app.services.n8n.httpx.post")
@@ -236,9 +270,14 @@ def test_ask_project_chat_timeout_marks_run_failed(
     project.valid_rows = 1
     db_session.commit()
 
-    response = authenticated_client.post(f"/projects/{project.id}/chat/ask", data={"question": "Q?"})
-    assert response.status_code == 200
-    assert "could not be answered" in response.text.lower() or "failed" in response.text.lower()
+    response = authenticated_client.post(
+        f"/projects/{project.id}/chat/ask",
+        data={"question": "Q?"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    page = authenticated_client.get(response.headers["location"])
+    assert "could not be answered" in page.text.lower() or "failed" in page.text.lower()
 
 
 @patch("app.services.n8n.httpx.post")
@@ -294,8 +333,11 @@ def test_retry_after_n8n_failure_succeeds(mock_post, authenticated_client, db_se
 
     mock_post.side_effect = None
     mock_post.return_value = _mock_response(200)
-    response = authenticated_client.post(f"/chat-runs/{failed_run.id}/retry")
-    assert response.status_code == 200
+    response = authenticated_client.post(
+        f"/chat-runs/{failed_run.id}/retry", follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/projects/{project.id}?tab=chat"
 
     db_session.refresh(failed_run)
     new_run = db_session.query(ChatRun).filter_by(retry_of_run_id=failed_run.id).one()

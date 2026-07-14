@@ -220,15 +220,38 @@ def test_start_project_narrative_success(
     project = project_factory()
     article_factory(project, count=1, retailer="Auchan")
 
-    response = authenticated_client.post(f"/projects/{project.id}/narratives/start")
+    response = authenticated_client.post(
+        f"/projects/{project.id}/narratives/start", follow_redirects=False
+    )
 
-    assert response.status_code == 200
-    assert "Narrative generation started" in response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/projects/{project.id}?tab=insights"
     assert mock_post.called
     _, kwargs = mock_post.call_args
     assert "secret" not in kwargs["json"]
     assert kwargs["headers"] == {"x-internal-secret": "test-internal-secret"}
-    assert "test-internal-secret" not in response.text
+
+
+@patch("app.services.n8n.httpx.post")
+def test_project_narrative_uses_post_redirect_get_on_refresh(
+    mock_post, authenticated_client, db_session, project_factory, article_factory
+):
+    from app.models.narrative import NarrativeGeneration
+
+    mock_post.return_value = _mock_response(202)
+    project = project_factory()
+    article_factory(project, count=1, retailer="Auchan")
+
+    post_response = authenticated_client.post(
+        f"/projects/{project.id}/narratives/start", follow_redirects=False
+    )
+    assert post_response.status_code == 303
+
+    authenticated_client.get(post_response.headers["location"])
+    authenticated_client.get(post_response.headers["location"])
+
+    assert db_session.query(NarrativeGeneration).filter_by(project_id=project.id).count() == 1
+    assert mock_post.call_count == 1
 
 
 @patch("app.services.n8n.httpx.post")
@@ -239,10 +262,13 @@ def test_start_project_narrative_timeout_marks_failed(
     project = project_factory()
     article_factory(project, count=1, retailer="Auchan")
 
-    response = authenticated_client.post(f"/projects/{project.id}/narratives/start")
+    response = authenticated_client.post(
+        f"/projects/{project.id}/narratives/start", follow_redirects=False
+    )
 
-    assert response.status_code == 502
-    assert "timed out" in response.text.lower()
+    assert response.status_code == 303
+    page = authenticated_client.get(response.headers["location"])
+    assert "failed" in page.text.lower()
 
 
 @patch("app.services.n8n.httpx.post")
@@ -255,17 +281,21 @@ def test_start_project_narrative_dedup_reuses_completed_generation(
     project = project_factory()
     article_factory(project, count=1, retailer="Auchan")
 
-    first_response = authenticated_client.post(f"/projects/{project.id}/narratives/start")
-    assert first_response.status_code == 200
+    first_response = authenticated_client.post(
+        f"/projects/{project.id}/narratives/start", follow_redirects=False
+    )
+    assert first_response.status_code == 303
     assert mock_post.call_count == 1
 
     generation = db_session.query(NarrativeGeneration).filter_by(project_id=project.id).one()
     generation.status = NarrativeGenerationStatus.COMPLETE
     db_session.commit()
 
-    second_response = authenticated_client.post(f"/projects/{project.id}/narratives/start")
-    assert second_response.status_code == 200
-    assert "Reused an existing narrative generation" in second_response.text
+    second_response = authenticated_client.post(
+        f"/projects/{project.id}/narratives/start", follow_redirects=False
+    )
+    assert second_response.status_code == 303
+    assert second_response.headers["location"] == f"/projects/{project.id}?tab=insights"
     # n8n was not called again for the unchanged input.
     assert mock_post.call_count == 1
 

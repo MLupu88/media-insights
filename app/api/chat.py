@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.pages import render, render_project_detail
@@ -57,6 +57,23 @@ def _trigger_or_fail(db: Session, run: ChatRun) -> ChatRun:
     return run
 
 
+@router.get("/api/ui/chat-runs/{run_id}/status")
+def get_chat_run_ui_status(run_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Browser-facing, session-authenticated status probe used only for
+    progressive UI polling. It deliberately returns the smallest possible
+    payload and never exposes prompts, evidence, errors, or internal secrets.
+    """
+    run = _get_run_or_404(db, run_id)
+    return JSONResponse(
+        content={
+            "id": str(run.id),
+            "status": run.status,
+            "terminal": run.status in ChatRunStatus.TERMINAL,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.post("/projects/{project_id}/chat/ask")
 def ask_project_chat(
     project_id: uuid.UUID,
@@ -82,7 +99,13 @@ def ask_project_chat(
 
     _trigger_or_fail(db, run)
 
-    return render_project_detail(request, db, project, active_tab="chat", status_code=200)
+    # Post/Redirect/Get: the browser must land on a GET page after creating a
+    # run. Otherwise a manual refresh re-submits the last question and creates
+    # a duplicate run/message.
+    return RedirectResponse(
+        url=f"/projects/{project.id}?tab=chat",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @router.post("/compare/chat/ask")
@@ -156,7 +179,10 @@ def retry_chat_run(run_id: uuid.UUID, request: Request, db: Session = Depends(ge
         )
 
     project = _get_project_or_404(db, session.project_id)
-    return render_project_detail(request, db, project, active_tab="chat", status_code=200)
+    return RedirectResponse(
+        url=f"/projects/{project.id}?tab=chat",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @router.get("/chat-sessions/{session_id}")
