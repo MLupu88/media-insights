@@ -107,6 +107,15 @@ class BatchCompleteResponse(BaseModel):
     batch_id: uuid.UUID
 
 
+class BatchFailRequest(BaseModel):
+    error_message: str = Field(min_length=1, max_length=500)
+
+
+class BatchFailResponse(BaseModel):
+    status: str
+    batch_id: uuid.UUID
+
+
 class ProjectSummaryResponse(BaseModel):
     project_id: uuid.UUID
     total_files: int
