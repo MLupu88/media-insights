@@ -1,0 +1,108 @@
+{% set crq = classification_results_query %}
+{% set tax = classification_taxonomy %}
+
+<form method="get" action="/projects/{{ project.id }}" class="msl-panel flex flex-wrap items-end gap-4 p-4">
+  <input type="hidden" name="tab" value="classification" />
+
+  <div class="min-w-[200px] flex-1">
+    <label class="msl-label" for="results-search">Search</label>
+    <input
+      id="results-search"
+      type="text"
+      name="results_search"
+      value="{{ crq.search or '' }}"
+      placeholder="Title, subject, publication, story key…"
+      class="msl-input"
+    />
+  </div>
+
+  <div>
+    <label class="msl-label" for="results-primary-topic">Primary topic</label>
+    <select id="results-primary-topic" name="results_primary_topic" class="msl-input">
+      <option value="">All topics</option>
+      {% for topic in tax.primary_topics %}
+        <option value="{{ topic }}" {% if crq.primary_topic == topic %}selected{% endif %}>{{ topic | primary_topic_label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="results-category">Category</label>
+    <select id="results-category" name="results_communication_category" class="msl-input">
+      <option value="">All categories</option>
+      {% for category in tax.communication_categories %}
+        <option value="{{ category }}" {% if crq.communication_category == category %}selected{% endif %}>{{ category | communication_category_label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="results-sentiment">Sentiment</label>
+    <select id="results-sentiment" name="results_sentiment" class="msl-input">
+      <option value="">All sentiments</option>
+      {% for sentiment in tax.sentiments %}
+        <option value="{{ sentiment }}" {% if crq.sentiment == sentiment %}selected{% endif %}>{{ sentiment | sentiment_label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="results-brand-role">Brand role</label>
+    <select id="results-brand-role" name="results_brand_role" class="msl-input">
+      <option value="">All roles</option>
+      {% for role in tax.brand_roles %}
+        <option value="{{ role }}" {% if crq.brand_role == role %}selected{% endif %}>{{ role | brand_role_label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="results-confidence">Confidence</label>
+    <select id="results-confidence" name="results_confidence" class="msl-input">
+      <option value="all" {% if crq.confidence_bucket == "all" %}selected{% endif %}>All</option>
+      <option value="low" {% if crq.confidence_bucket == "low" %}selected{% endif %}>Low confidence</option>
+      <option value="high" {% if crq.confidence_bucket == "high" %}selected{% endif %}>High confidence</option>
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="results-review-status">Review status</label>
+    <select id="results-review-status" name="results_review_status" class="msl-input">
+      <option value="">All</option>
+      {% for status_value in tax.review_statuses %}
+        <option value="{{ status_value }}" {% if crq.review_status == status_value %}selected{% endif %}>{{ status_value | review_status_label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="msl-label" for="results-date-from">From</label>
+    <input id="results-date-from" type="date" name="results_date_from" value="{{ crq.date_from.isoformat() if crq.date_from else '' }}" class="msl-input" />
+  </div>
+
+  <div>
+    <label class="msl-label" for="results-date-to">To</label>
+    <input id="results-date-to" type="date" name="results_date_to" value="{{ crq.date_to.isoformat() if crq.date_to else '' }}" class="msl-input" />
+  </div>
+
+  <div>
+    <label class="msl-label" for="results-sort">Sort by</label>
+    <select id="results-sort" name="results_sort" class="msl-input">
+      <option value="date_desc" {% if crq.sort == "date_desc" %}selected{% endif %}>Date (newest first)</option>
+      <option value="date_asc" {% if crq.sort == "date_asc" %}selected{% endif %}>Date (oldest first)</option>
+      <option value="reach_desc" {% if crq.sort == "reach_desc" %}selected{% endif %}>Reach (highest first)</option>
+      <option value="reach_asc" {% if crq.sort == "reach_asc" %}selected{% endif %}>Reach (lowest first)</option>
+      <option value="confidence_desc" {% if crq.sort == "confidence_desc" %}selected{% endif %}>Confidence (highest first)</option>
+      <option value="confidence_asc" {% if crq.sort == "confidence_asc" %}selected{% endif %}>Confidence (lowest first)</option>
+    </select>
+  </div>
+
+  <div class="flex gap-2">
+    <button type="submit" class="bg-ink px-4 py-2 text-sm font-medium text-paper transition hover:bg-accent">
+      Apply filters
+    </button>
+    <a href="/projects/{{ project.id }}?tab=classification" class="px-4 py-2 text-sm font-medium text-ink/60 transition hover:text-ink">
+      Reset
+    </a>
+  </div>
+</form>

@@ -60,7 +60,7 @@ def test_review_tab_never_lists_another_projects_rows(
     assert response.status_code == 200
     assert "Belongs to B" not in response.text
     assert "OtherProject.xlsx" not in response.text
-    assert "No rows need review" in response.text
+    assert "No brand assignments need review." in response.text
 
 
 def test_review_badge_absent_when_nothing_needs_review(authenticated_client, project_factory):

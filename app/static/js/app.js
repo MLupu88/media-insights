@@ -38,6 +38,20 @@ document.addEventListener("click", (event) => {
   }
 });
 
+// "Select all visible" for a bulk-action checkbox group: purely a
+// convenience toggle over the real per-row checkboxes already submitted
+// with the form (via the `form="..."` attribute) -- nothing here changes
+// what gets submitted, it only pre-checks/unchecks the boxes.
+document.addEventListener("change", (event) => {
+  const selectAll = event.target.closest("[data-select-all]");
+  if (!selectAll) return;
+  const name = selectAll.getAttribute("data-select-all");
+  const container = selectAll.closest(".msl-panel") || document;
+  container.querySelectorAll(`input[type="checkbox"][name="${name}"]`).forEach((checkbox) => {
+    checkbox.checked = selectAll.checked;
+  });
+});
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     document.querySelectorAll("[data-modal]:not(.hidden)").forEach((modal) => {
