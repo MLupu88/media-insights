@@ -17,6 +17,8 @@ from app.services.narrative_service import (
     NarrativeServiceError,
     create_comparison_generation,
     create_project_generation,
+    delete_all_project_narrative_generations,
+    delete_narrative_generation,
 )
 
 router = APIRouter(dependencies=[Depends(require_web_session)])
@@ -168,4 +170,38 @@ def narrative_generation_detail_page(
         request,
         "narrative_generation_detail.html",
         {"generation": generation, "valid_insights": valid_insights},
+    )
+
+
+@router.post("/projects/{project_id}/narrative-generations/{generation_id}/delete")
+def delete_narrative_generation_action(
+    project_id: uuid.UUID, generation_id: uuid.UUID, db: Session = Depends(get_db)
+):
+    _get_project_or_404(db, project_id)
+
+    try:
+        delete_narrative_generation(db, project_id, generation_id)
+    except NarrativeServiceError as exc:
+        # Not found / belongs to a different project — a safe 404, nothing
+        # deleted (delete_narrative_generation only commits after
+        # successfully locating and owning the row).
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    return RedirectResponse(
+        url=f"/projects/{project_id}?tab=insights&insights_deleted=1",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/projects/{project_id}/narratives/delete-all")
+def delete_all_project_narrative_generations_action(
+    project_id: uuid.UUID, db: Session = Depends(get_db)
+):
+    _get_project_or_404(db, project_id)
+
+    deleted_count = delete_all_project_narrative_generations(db, project_id)
+
+    return RedirectResponse(
+        url=f"/projects/{project_id}?tab=insights&insights_deleted_all={deleted_count}",
+        status_code=status.HTTP_303_SEE_OTHER,
     )

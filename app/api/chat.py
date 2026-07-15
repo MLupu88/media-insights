@@ -14,6 +14,8 @@ from app.services.analytics_filters import extract_prefixed_filter_params
 from app.services.chat_service import (
     ChatServiceError,
     create_run,
+    delete_all_project_chat,
+    delete_chat_exchange,
     find_or_create_comparison_session,
     find_or_create_project_session,
     retry_run,
@@ -194,4 +196,36 @@ def chat_session_detail_page(
         request,
         "chat_session_detail.html",
         {"chat_session": session},
+    )
+
+
+@router.post("/projects/{project_id}/chat/messages/{message_id}/delete")
+def delete_chat_exchange_action(
+    project_id: uuid.UUID, message_id: uuid.UUID, db: Session = Depends(get_db)
+):
+    _get_project_or_404(db, project_id)
+
+    try:
+        delete_chat_exchange(db, project_id, message_id)
+    except ChatServiceError as exc:
+        # Not found / belongs to a different project or to a comparison
+        # session — a safe 404, nothing deleted (delete_chat_exchange only
+        # commits after successfully locating and owning the row).
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    return RedirectResponse(
+        url=f"/projects/{project_id}?tab=chat&chat_deleted=1",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/projects/{project_id}/chat/delete-all")
+def delete_all_project_chat_action(project_id: uuid.UUID, db: Session = Depends(get_db)):
+    _get_project_or_404(db, project_id)
+
+    deleted_count = delete_all_project_chat(db, project_id)
+
+    return RedirectResponse(
+        url=f"/projects/{project_id}?tab=chat&chat_deleted_all={deleted_count}",
+        status_code=status.HTTP_303_SEE_OTHER,
     )

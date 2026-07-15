@@ -38,6 +38,27 @@ document.addEventListener("click", (event) => {
   }
 });
 
+// Explicit browser confirmation for destructive form submissions (e.g.
+// deleting a conversation or narrative generation): a form with
+// data-confirm="..." is blocked unless the user accepts the native
+// confirm() dialog. Progressive enhancement only -- the server is the
+// real authority on what gets deleted; this only prevents an accidental
+// click. The submit button is disabled right after a confirmed submit to
+// prevent a double-click from firing the request twice.
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  const message = form.getAttribute && form.getAttribute("data-confirm");
+  if (!message) return;
+
+  if (!window.confirm(message)) {
+    event.preventDefault();
+    return;
+  }
+
+  const button = form.querySelector('button[type="submit"]');
+  if (button) button.disabled = true;
+});
+
 // "Select all visible" for a bulk-action checkbox group: purely a
 // convenience toggle over the real per-row checkboxes already submitted
 // with the form (via the `form="..."` attribute) -- nothing here changes

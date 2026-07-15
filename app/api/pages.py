@@ -456,7 +456,37 @@ def project_detail_page(
         if tab in ("overview", "files", "classification", "review", "analytics", "insights", "chat")
         else "overview"
     )
-    return render_project_detail(request, db, project, active_tab=active_tab)
+
+    chat_message = None
+    if request.query_params.get("chat_deleted") == "1":
+        chat_message = {"type": "success", "text": "The conversation was deleted."}
+    elif "chat_deleted_all" in request.query_params:
+        count = request.query_params.get("chat_deleted_all")
+        chat_message = (
+            {"type": "success", "text": "All conversations for this project were deleted."}
+            if count != "0"
+            else {"type": "info", "text": "There were no conversations to delete."}
+        )
+
+    narrative_message = None
+    if request.query_params.get("insights_deleted") == "1":
+        narrative_message = {"type": "success", "text": "The narrative generation was deleted."}
+    elif "insights_deleted_all" in request.query_params:
+        count = request.query_params.get("insights_deleted_all")
+        narrative_message = (
+            {"type": "success", "text": "All insights for this project were deleted."}
+            if count != "0"
+            else {"type": "info", "text": "There were no insights to delete."}
+        )
+
+    return render_project_detail(
+        request,
+        db,
+        project,
+        active_tab=active_tab,
+        chat_message=chat_message,
+        narrative_message=narrative_message,
+    )
 
 
 @router.get("/compare")

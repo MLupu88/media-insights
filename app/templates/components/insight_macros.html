@@ -2,7 +2,7 @@
    analytics_macros.html/comparison_macros.html or the stable tabs. #}
 {% from "components/macros.html" import status_badge %}
 
-{% macro narrative_generation_row(generation) -%}
+{% macro narrative_generation_row(generation, project_id) -%}
   <div class="msl-panel flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
     <div>
       <p class="text-sm font-medium text-ink">
@@ -21,8 +21,23 @@
       <a href="/narrative-generations/{{ generation.id }}" class="text-sm font-medium text-ink/60 transition hover:text-ink">
         View →
       </a>
+      <form action="/projects/{{ project_id }}/narrative-generations/{{ generation.id }}/delete" method="post"
+            data-confirm="Delete this narrative generation? This permanently removes it and every insight it produced. This cannot be undone.">
+        <button type="submit" class="text-xs font-medium text-ink/30 underline transition hover:text-accent">
+          Delete
+        </button>
+      </form>
     </div>
   </div>
+{%- endmacro %}
+
+{% macro narrative_delete_all_form(project_id) -%}
+  <form action="/projects/{{ project_id }}/narratives/delete-all" method="post"
+        data-confirm="Delete ALL narrative generations for this project? This permanently removes every generation and every insight in this project's Insights tab. This cannot be undone.">
+    <button type="submit" class="border border-accent/40 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/5">
+      Delete all insights
+    </button>
+  </form>
 {%- endmacro %}
 
 {% macro narrative_insight_card(insight) -%}

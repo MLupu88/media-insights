@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% from "components/macros.html" import status_badge, empty_state %}
 {% from "components/analytics_macros.html" import stat_tile_grid, section_title, chart_panel %}
-{% from "components/insight_macros.html" import narrative_generation_row %}
-{% from "components/chat_macros.html" import chat_ask_form, chat_message_bubble, chat_pending_run_notice %}
+{% from "components/insight_macros.html" import narrative_generation_row, narrative_delete_all_form %}
+{% from "components/chat_macros.html" import chat_ask_form, chat_message_bubble, chat_pending_run_notice, chat_delete_all_form %}
 {% from "components/review_macros.html" import review_file_group %}
 {% from "components/classification_macros.html" import classification_results_table, classification_review_queue %}
 
@@ -731,11 +731,16 @@
       {% endif %}
 
       <div class="mt-8">
-        {{ section_title("Narrative generations", "Each generation is grounded strictly in the analytics snapshot captured when it was created — later data changes never retroactively affect it.") }}
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          {{ section_title("Narrative generations", "Each generation is grounded strictly in the analytics snapshot captured when it was created — later data changes never retroactively affect it.") }}
+          {% if narrative_generations %}
+            {{ narrative_delete_all_form(project.id) }}
+          {% endif %}
+        </div>
         {% if narrative_generations %}
           <div class="space-y-3">
             {% for generation in narrative_generations %}
-              {{ narrative_generation_row(generation) }}
+              {{ narrative_generation_row(generation, project.id) }}
             {% endfor %}
           </div>
         {% else %}
@@ -760,12 +765,17 @@
     {% else %}
       {% set latest_run = chat_session.runs[-1] if chat_session and chat_session.runs else None %}
 
-      {{ section_title("Ask about this project's coverage", "Answers are grounded strictly in this project's analytics and validated insights — never invented.") }}
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        {{ section_title("Ask about this project's coverage", "Answers are grounded strictly in this project's analytics and validated insights — never invented.") }}
+        {% if chat_session and chat_session.messages %}
+          {{ chat_delete_all_form(project.id) }}
+        {% endif %}
+      </div>
 
       {% if chat_session %}
         <div class="space-y-3">
           {% for message in chat_session.messages %}
-            {{ chat_message_bubble(message) }}
+            {{ chat_message_bubble(message, project.id) }}
           {% endfor %}
         </div>
         {% if latest_run and latest_run.status in ("pending", "running", "failed") %}

@@ -12,7 +12,7 @@ which `process_results` here validates and persists.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.narrative import (
@@ -282,3 +282,55 @@ def get_project_narrative_generations(
         .order_by(NarrativeGeneration.created_at.desc())
     )
     return list(db.execute(stmt).scalars().all())
+
+
+# --- Deletion ----------------------------------------------------------------
+
+
+def delete_narrative_generation(
+    db: Session, project_id: uuid.UUID, generation_id: uuid.UUID
+) -> None:
+    """Deletes one narrative generation and every dependent NarrativeInsight.
+
+    narrative_insights.generation_id -> narrative_generations.id is ON
+    DELETE CASCADE (see app/models/narrative.py), so a single row delete is
+    complete and correct without any manual child cleanup. A generation
+    that was "regenerated from" this one has its
+    regenerated_from_generation_id set NULL automatically (ON DELETE SET
+    NULL) -- its own content is never affected.
+    """
+    generation = db.execute(
+        select(NarrativeGeneration).where(
+            NarrativeGeneration.id == generation_id,
+            NarrativeGeneration.project_id == project_id,
+        )
+    ).scalar_one_or_none()
+    if generation is None:
+        raise NarrativeServiceError("Narrative generation not found.", 404)
+
+    db.delete(generation)
+    db.commit()
+
+
+def delete_all_project_narrative_generations(db: Session, project_id: uuid.UUID) -> int:
+    """Deletes every narrative generation (and, via cascade, every
+    dependent insight) belonging to this project -- exactly the set
+    get_project_narrative_generations renders in the Insights tab, so
+    "delete all" removes precisely what is displayed. Returns the number
+    of generations deleted so the caller can report an accurate message.
+    """
+    generation_ids = list(
+        db.execute(
+            select(NarrativeGeneration.id).where(NarrativeGeneration.project_id == project_id)
+        ).scalars()
+    )
+    if not generation_ids:
+        return 0
+
+    db.execute(
+        delete(NarrativeGeneration)
+        .where(NarrativeGeneration.id.in_(generation_ids))
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return len(generation_ids)

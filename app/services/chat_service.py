@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -632,3 +632,82 @@ def get_project_chat_sessions(db: Session, project_id: uuid.UUID) -> list[ChatSe
         .order_by(ChatSession.created_at.desc())
     )
     return list(db.execute(stmt).scalars().all())
+
+
+# --- Deletion ----------------------------------------------------------------
+
+
+def delete_chat_exchange(db: Session, project_id: uuid.UUID, message_id: uuid.UUID) -> None:
+    """Deletes one complete conversation exchange: the user's question,
+    every ChatRun attempt tied to it (retry_run reuses the original
+    user_message_id for a retry, so a failed attempt and its successful
+    retry are always deleted together, as one unit), and the assistant's
+    answer message, if the exchange ever completed.
+
+    Ownership is checked via the session's project_id, and comparison
+    sessions anchored at this project (baseline_project_ids is not NULL)
+    are explicitly excluded -- this only ever touches the project's own
+    conversation, matching get_project_own_chat_session's scope exactly.
+
+    ChatMessage.run_id -> chat_runs.id is ON DELETE SET NULL, not CASCADE
+    (see app/models/chat.py) -- deleting a run alone would leave the
+    assistant's answer behind with a dangling NULL run_id instead of
+    removing it, so it is deleted explicitly first.
+    ChatRun.user_message_id -> chat_messages.id IS ON DELETE CASCADE, so
+    deleting the user message below removes every run referencing it (the
+    whole retry lineage) in one statement -- no manual run deletion needed.
+    """
+    message = db.execute(
+        select(ChatMessage)
+        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        .where(
+            ChatMessage.id == message_id,
+            ChatSession.project_id == project_id,
+            ChatSession.baseline_project_ids.is_(None),
+        )
+    ).scalar_one_or_none()
+    if message is None or message.role != ChatMessageRole.USER:
+        raise ChatServiceError("Conversation not found.", 404)
+
+    run_ids = list(
+        db.execute(
+            select(ChatRun.id).where(ChatRun.user_message_id == message.id)
+        ).scalars()
+    )
+    if run_ids:
+        db.execute(
+            delete(ChatMessage)
+            .where(ChatMessage.run_id.in_(run_ids))
+            .execution_options(synchronize_session=False)
+        )
+    db.delete(message)  # cascades to every ChatRun in run_ids
+    db.commit()
+
+
+def delete_all_project_chat(db: Session, project_id: uuid.UUID) -> int:
+    """Deletes the project's own chat session in its entirety -- every
+    message and run cascades from the session delete (both
+    chat_messages.session_id and chat_runs.session_id are ON DELETE
+    CASCADE, so this single delete is complete and correct without any
+    manual child cleanup). Comparison sessions anchored at this project are
+    never touched. A fresh session is transparently created the next time a
+    question is asked (find_or_create_project_session).
+
+    Returns the number of sessions deleted (0 or 1) so the caller can
+    report an accurate "nothing to delete" vs "deleted" message.
+    """
+    session_id = db.execute(
+        select(ChatSession.id).where(
+            ChatSession.project_id == project_id, ChatSession.baseline_project_ids.is_(None)
+        )
+    ).scalar_one_or_none()
+    if session_id is None:
+        return 0
+
+    db.execute(
+        delete(ChatSession)
+        .where(ChatSession.id == session_id)
+        .execution_options(synchronize_session=False)
+    )
+    db.commit()
+    return 1
