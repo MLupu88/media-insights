@@ -3,17 +3,27 @@
    stable tabs. #}
 {% from "components/macros.html" import status_badge %}
 
-{% macro chat_message_bubble(message) -%}
+{% macro chat_message_bubble(message, project_id=None) -%}
   <div class="border border-line px-4 py-3 {% if message.role == 'user' %}bg-paper{% else %}bg-white{% endif %}">
     <div class="flex items-center justify-between">
       <p class="text-xs font-medium uppercase tracking-wide text-ink/40">
         {{ "You" if message.role == "user" else "Assistant" }}
       </p>
-      {% if message.run and message.run.answer_type %}
-        <span class="border border-line px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-ink/60">
-          {{ message.run.answer_type }}
-        </span>
-      {% endif %}
+      <div class="flex items-center gap-2">
+        {% if message.run and message.run.answer_type %}
+          <span class="border border-line px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-ink/60">
+            {{ message.run.answer_type }}
+          </span>
+        {% endif %}
+        {% if message.role == "user" and project_id %}
+          <form action="/projects/{{ project_id }}/chat/messages/{{ message.id }}/delete" method="post"
+                data-confirm="Delete this conversation? This removes the question, the answer, and all related data permanently. This cannot be undone.">
+            <button type="submit" class="text-[10px] font-medium uppercase tracking-wide text-ink/30 underline transition hover:text-accent">
+              Delete
+            </button>
+          </form>
+        {% endif %}
+      </div>
     </div>
 
     <p class="mt-2 whitespace-pre-wrap text-sm text-ink/80">{{ message.content }}</p>
@@ -81,6 +91,15 @@
       </form>
     {% endif %}
   </div>
+{%- endmacro %}
+
+{% macro chat_delete_all_form(project_id) -%}
+  <form action="/projects/{{ project_id }}/chat/delete-all" method="post"
+        data-confirm="Delete ALL conversations for this project? This permanently removes every question, answer, run and citation in this project's chat history. This cannot be undone.">
+    <button type="submit" class="border border-accent/40 px-3 py-1.5 text-xs font-medium text-accent transition hover:bg-accent/5">
+      Delete all conversations
+    </button>
+  </form>
 {%- endmacro %}
 
 {% macro chat_ask_form(action, disabled=False) -%}
